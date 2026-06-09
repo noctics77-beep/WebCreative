@@ -1,0 +1,74 @@
+{
+  "project_name": "CreativeStore",
+  "language": "id",
+  "theme": "dark",
+  "archetype": "5 (Luxury / Premium Tech)",
+  "colors": {
+    "background": "#0f1117",
+    "surface": "#1a1d27",
+    "surface_glass": "rgba(26, 29, 39, 0.7)",
+    "primary": "#F5A623",
+    "primary_hover": "#d98f1a",
+    "text_main": "#F8F9FA",
+    "text_muted": "#9CA3AF",
+    "border": "rgba(255, 255, 255, 0.1)",
+    "border_focus": "rgba(245, 166, 35, 0.5)",
+    "error": "#ef4444",
+    "success": "#10b981"
+  },
+  "typography": {
+    "font_family_heading": "Outfit, sans-serif",
+    "font_family_body": "Manrope, sans-serif",
+    "rules": {
+      "h1": "text-4xl md:text-5xl lg:text-6xl tracking-tight font-light",
+      "h2": "text-2xl md:text-3xl lg:text-4xl tracking-tight",
+      "h3": "text-xl md:text-2xl",
+      "body": "text-base leading-relaxed text-[#9CA3AF]",
+      "labels": "text-sm uppercase tracking-[0.2em] text-[#F8F9FA]"
+    }
+  },
+  "layout_and_spacing": {
+    "container": "max-w-7xl mx-auto px-4 sm:px-6 lg:px-8",
+    "section_spacing": "py-20 md:py-32",
+    "card_padding": "p-6 md:p-8",
+    "grid_storefront": "grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8",
+    "grid_dashboard": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6"
+  },
+  "surface_strategies": {
+    "storefront_cards": "Use pure HTML/Tailwind for store elements. Apply glassmorphism: bg-[#1a1d27]/70 backdrop-blur-xl border border-white/10 rounded-2xl hover:border-[#F5A623]/50 transition-all duration-300",
+    "dashboard_cards": "Use Shadcn Card component. Override to solid background: bg-[#1a1d27] border border-white/5 rounded-xl",
+    "buttons": "Primary: bg-[#F5A623] text-[#0f1117] hover:bg-[#d98f1a] font-semibold. Secondary: bg-transparent border border-white/20 text-white hover:bg-white/5",
+    "inputs": "bg-[#0f1117] border-white/20 text-white focus:border-[#F5A623] focus:ring-[#F5A623]/20"
+  },
+  "images": {
+    "logo": {
+      "url": "https://customer-assets.emergentagent.com/job_digital-goods-hub-14/artifacts/gqk3po8e_6109359171045101715.jpg",
+      "alt": "CreativeStore Logo"
+    },
+    "hero_background": {
+      "url": "https://images.unsplash.com/photo-1709377195538-5522ed0f9e10?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA3MDB8MHwxfHNlYXJjaHwxfHxhYnN0cmFjdCUyMGRhcmslMjB0ZWNobm9sb2d5JTIwZ29sZHxlbnwwfHx8fDE3ODA5NzY4Njd8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Abstract dark gold technology background"
+    },
+    "product_placeholders": [
+      "https://images.unsplash.com/photo-1625838144804-300f3907c110?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Njd8MHwxfHNlYXJjaHwyfHxkaWdpdGFsJTIwd29ya3NwYWNlJTIwZGFya3xlbnwwfHx8fDE3ODA5NzY4Njd8MA&ixlib=rb-4.1.0&q=85",
+      "https://images.unsplash.com/photo-1668713239048-0746aac1fec1?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2Njd8MHwxfHNlYXJjaHwxfHxkaWdpdGFsJTIwd29ya3NwYWNlJTIwZGFya3xlbnwwfHx8fDE3ODA5NzY4Njd8MA&ixlib=rb-4.1.0&q=85"
+    ],
+    "partnership_hero": {
+      "url": "https://images.unsplash.com/photo-1513346940221-6f673d962e97?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA3MDB8MHwxfHNlYXJjaHwzfHxhYnN0cmFjdCUyMGRhcmslMjB0ZWNobm9sb2d5JTIwZ29sZHxlbnwwfHx8fDE3ODA5NzY4Njd8MA&ixlib=rb-4.1.0&q=85",
+      "alt": "Partnership background"
+    }
+  },
+  "implementation_instructions": [
+    "NOTE: The frontend environment uses JavaScript (.js, .jsx), NOT TypeScript. Do not create or expect .tsx files.",
+    "Configure Tailwind with the custom colors: background (#0f1117), surface (#1a1d27), and primary (#F5A623).",
+    "Apply 'dark' class to the html/body element to enforce dark mode across Shadcn components.",
+    "Use @phosphor-icons/react for icons.",
+    "Storefront: Hero section must have the store name 'CreativeStore' and tagline. Show the product catalog grid with photo, name, original price (strikethrough), discounted price, short description, and 'Pesan Sekarang' button.",
+    "Order Modal: Include fields for Name, WA/Telegram, and Payment Method (QRIS/Transfer Bank). If a '?ref=' parameter is in the URL, track it invisibly in the form state. On submit, show an Order ID like 'ORDXXXX'.",
+    "Partnership Page: Side-by-side cards. Affiliate card has a registration form. Reseller card has a 'Hubungi WhatsApp' button.",
+    "Affiliate Dashboard: Authenticate by Affiliate ID. Display Name, ID, Referral Link (with copy to clipboard), Saldo Komisi, Total Withdrawn, Sales History table, Withdraw History table, and Withdraw form.",
+    "Admin Panel: Password protected. Tabs for Products (CRUD, discount toggle, commission %, stock), Orders (confirm/cancel), Affiliates, Withdrawals (approve/reject).",
+    "All copy MUST be in Bahasa Indonesia.",
+    "CRITICAL TESTING REQUIREMENT: Every interactive element (buttons, inputs, tabs, table rows) MUST have a kebab-case 'data-testid' attribute (e.g., 'data-testid=\"order-submit-button\"')."
+  ]
+}
