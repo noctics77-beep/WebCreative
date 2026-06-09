@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Flame, AlertTriangle, ArrowRight } from "lucide-react";
+import SocialProof from "@/components/SocialProof";
 
 const LS_KEY = "cs_urgency_deadline";
 const DURATION = 24 * 60 * 60 * 1000; // 24 hours
@@ -83,6 +84,11 @@ export default function UrgencySection() {
           kami <b className="text-white">terbatas</b> — dan kami{" "}
           <b className="text-white">tidak membuka ini selamanya</b>.
         </p>
+
+        {/* Social Proof */}
+        <div className="mt-10">
+          <SocialProof />
+        </div>
 
         {/* Countdown */}
         <div className="mt-10">

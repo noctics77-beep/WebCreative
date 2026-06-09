@@ -119,6 +119,7 @@ export default function AdminPanel() {
           <TabsTrigger value="orders" data-testid="tab-orders">Order</TabsTrigger>
           <TabsTrigger value="affiliates" data-testid="tab-affiliates">Affiliate</TabsTrigger>
           <TabsTrigger value="withdrawals" data-testid="tab-withdrawals">WD</TabsTrigger>
+          <TabsTrigger value="settings" data-testid="tab-settings">Settings</TabsTrigger>
         </TabsList>
 
         <TabsContent value="products" className="mt-6">
@@ -132,6 +133,9 @@ export default function AdminPanel() {
         </TabsContent>
         <TabsContent value="withdrawals" className="mt-6">
           <WithdrawalsTab api={api} />
+        </TabsContent>
+        <TabsContent value="settings" className="mt-6">
+          <SettingsTab api={api} />
         </TabsContent>
       </Tabs>
     </div>
@@ -533,6 +537,82 @@ function WithdrawalsTab({ api }) {
           )}
         </TableBody>
       </Table>
+    </div>
+  );
+}
+
+// ---------- Settings ----------
+function SettingsTab({ api }) {
+  const [stats, setStats] = useState({ products_sold: "", active_partners: "", rating: "" });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api.get("/stats").then((r) => setStats(r.data)).finally(() => setLoading(false));
+  }, []);
+
+  const save = async (e) => {
+    e.preventDefault();
+    if (!stats.products_sold || !stats.active_partners || !stats.rating) {
+      return toast.error("Semua field wajib diisi");
+    }
+    setSaving(true);
+    try {
+      const res = await api.put("/admin/stats", stats);
+      setStats(res.data);
+      toast.success("Statistik berhasil diperbarui");
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Gagal menyimpan");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) return <div className="text-white/40 text-sm">Memuat...</div>;
+
+  return (
+    <div className="glass rounded-2xl p-6 max-w-2xl">
+      <h3 className="font-display text-lg">Social Proof Statistics</h3>
+      <p className="text-white/50 text-sm mt-1">
+        Angka ini tampil di urgency section storefront. Update manual seiring bisnis berkembang.
+      </p>
+      <form onSubmit={save} className="space-y-4 mt-6">
+        <Field label='Produk Terjual (contoh: "243+")'>
+          <Input
+            data-testid="settings-products-sold-input"
+            value={stats.products_sold}
+            onChange={(e) => setStats({ ...stats, products_sold: e.target.value })}
+            placeholder="243+"
+            className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
+          />
+        </Field>
+        <Field label='Mitra Aktif (contoh: "89+")'>
+          <Input
+            data-testid="settings-active-partners-input"
+            value={stats.active_partners}
+            onChange={(e) => setStats({ ...stats, active_partners: e.target.value })}
+            placeholder="89+"
+            className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
+          />
+        </Field>
+        <Field label='Rating Kepuasan (contoh: "4.9/5")'>
+          <Input
+            data-testid="settings-rating-input"
+            value={stats.rating}
+            onChange={(e) => setStats({ ...stats, rating: e.target.value })}
+            placeholder="4.9/5"
+            className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
+          />
+        </Field>
+        <Button
+          type="submit"
+          data-testid="settings-save-btn"
+          disabled={saving}
+          className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold"
+        >
+          {saving ? <Loader2 className="animate-spin" size={15} /> : "Simpan"}
+        </Button>
+      </form>
     </div>
   );
 }

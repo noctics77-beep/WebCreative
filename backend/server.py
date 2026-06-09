@@ -183,6 +183,36 @@ async def get_config():
     return {"admin_whatsapp": ADMIN_WHATSAPP}
 
 
+# ---------- Public: Stats / Settings ----------
+DEFAULT_STATS = {
+    "products_sold": "243+",
+    "active_partners": "89+",
+    "rating": "4.9/5",
+}
+
+
+@api_router.get("/stats")
+async def get_stats():
+    doc = await db.settings.find_one({"id": "stats"}, {"_id": 0})
+    if not doc:
+        return DEFAULT_STATS
+    return {k: doc.get(k, v) for k, v in DEFAULT_STATS.items()}
+
+
+class StatsUpdate(BaseModel):
+    products_sold: str
+    active_partners: str
+    rating: str
+
+
+@api_router.put("/admin/stats")
+async def admin_update_stats(payload: StatsUpdate, x_admin_password: Optional[str] = Header(None)):
+    verify_admin(x_admin_password)
+    data = {"id": "stats", **payload.model_dump()}
+    await db.settings.update_one({"id": "stats"}, {"$set": data}, upsert=True)
+    return {k: data[k] for k in DEFAULT_STATS.keys()}
+
+
 # ---------- Public: Orders ----------
 @api_router.post("/orders")
 async def create_order(payload: OrderCreate):
