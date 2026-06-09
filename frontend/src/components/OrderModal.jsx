@@ -1,0 +1,202 @@
+import { useState } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+import {
+  RadioGroup,
+  RadioGroupItem,
+} from "@/components/ui/radio-group";
+import { api, formatIDR } from "@/lib/api";
+import { toast } from "sonner";
+import { CheckCircle2, Copy, Loader2 } from "lucide-react";
+
+export default function OrderModal({ open, onClose, product, referral }) {
+  const [form, setForm] = useState({
+    buyer_name: "",
+    contact: "",
+    payment_method: "qris",
+  });
+  const [loading, setLoading] = useState(false);
+  const [orderCode, setOrderCode] = useState(null);
+
+  if (!product) return null;
+  const hasDiscount =
+    product.discount_active && product.discount_price < product.original_price;
+  const finalPrice = hasDiscount ? product.discount_price : product.original_price;
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!form.buyer_name.trim() || !form.contact.trim()) {
+      toast.error("Mohon lengkapi nama dan kontak");
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await api.post("/orders", {
+        ...form,
+        product_id: product.id,
+        referral_affiliate_code: referral || null,
+      });
+      setOrderCode(res.data.order_code);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Gagal mengirim pesanan");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClose = (v) => {
+    if (!v) {
+      setOrderCode(null);
+      setForm({ buyer_name: "", contact: "", payment_method: "qris" });
+      onClose();
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={handleClose}>
+      <DialogContent
+        data-testid="order-modal"
+        className="bg-[#1a1d27] border border-white/10 text-white sm:max-w-[480px]"
+      >
+        {!orderCode ? (
+          <>
+            <DialogHeader>
+              <DialogTitle className="font-display text-2xl">
+                Pesan: <span className="gold-text">{product.name}</span>
+              </DialogTitle>
+              <DialogDescription className="text-white/55">
+                Isi data di bawah, admin akan konfirmasi via kontak yang kamu berikan.
+              </DialogDescription>
+            </DialogHeader>
+
+            <form onSubmit={submit} className="space-y-4 pt-2">
+              <div>
+                <Label htmlFor="buyer_name" className="text-xs uppercase tracking-widest text-white/60">Nama Lengkap</Label>
+                <Input
+                  id="buyer_name"
+                  data-testid="order-buyer-name-input"
+                  value={form.buyer_name}
+                  onChange={(e) => setForm({ ...form, buyer_name: e.target.value })}
+                  placeholder="Nama kamu"
+                  className="mt-1 bg-[#0f1117] border-white/15 text-white placeholder:text-white/30 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
+                />
+              </div>
+              <div>
+                <Label htmlFor="contact" className="text-xs uppercase tracking-widest text-white/60">WhatsApp / Telegram</Label>
+                <Input
+                  id="contact"
+                  data-testid="order-contact-input"
+                  value={form.contact}
+                  onChange={(e) => setForm({ ...form, contact: e.target.value })}
+                  placeholder="08xxxx atau @username"
+                  className="mt-1 bg-[#0f1117] border-white/15 text-white placeholder:text-white/30 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
+                />
+              </div>
+
+              <div>
+                <Label className="text-xs uppercase tracking-widest text-white/60">Metode Pembayaran</Label>
+                <RadioGroup
+                  value={form.payment_method}
+                  onValueChange={(v) => setForm({ ...form, payment_method: v })}
+                  className="grid grid-cols-2 gap-3 mt-2"
+                >
+                  <label
+                    data-testid="payment-qris-option"
+                    className={`flex items-center gap-2 px-3 py-3 rounded-lg border cursor-pointer transition ${
+                      form.payment_method === "qris"
+                        ? "border-[#F5A623] bg-[#F5A623]/10"
+                        : "border-white/10 hover:border-white/20"
+                    }`}
+                  >
+                    <RadioGroupItem value="qris" id="qris" className="border-white/30 text-[#F5A623]" />
+                    <span className="text-sm">QRIS</span>
+                  </label>
+                  <label
+                    data-testid="payment-transfer-option"
+                    className={`flex items-center gap-2 px-3 py-3 rounded-lg border cursor-pointer transition ${
+                      form.payment_method === "transfer"
+                        ? "border-[#F5A623] bg-[#F5A623]/10"
+                        : "border-white/10 hover:border-white/20"
+                    }`}
+                  >
+                    <RadioGroupItem value="transfer" id="transfer" className="border-white/30 text-[#F5A623]" />
+                    <span className="text-sm">Transfer Bank</span>
+                  </label>
+                </RadioGroup>
+              </div>
+
+              {referral && (
+                <div
+                  data-testid="referral-banner"
+                  className="px-3 py-2 rounded-lg bg-[#F5A623]/10 border border-[#F5A623]/30 text-sm text-[#F5A623]"
+                >
+                  Dirujuk oleh: <b>{referral}</b>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between pt-2 border-t border-white/5">
+                <span className="text-white/55 text-sm">Total Bayar</span>
+                <span className="font-display text-xl gold-text font-semibold">
+                  {formatIDR(finalPrice)}
+                </span>
+              </div>
+
+              <DialogFooter>
+                <Button
+                  type="submit"
+                  data-testid="order-submit-button"
+                  disabled={loading}
+                  className="w-full bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold"
+                >
+                  {loading ? <Loader2 className="animate-spin" size={16} /> : "Kirim Pesanan"}
+                </Button>
+              </DialogFooter>
+            </form>
+          </>
+        ) : (
+          <div className="text-center py-4" data-testid="order-success">
+            <div className="mx-auto w-14 h-14 rounded-full bg-[#10b981]/15 flex items-center justify-center mb-3">
+              <CheckCircle2 className="text-[#10b981]" size={28} />
+            </div>
+            <h3 className="font-display text-2xl">Pesanan Diterima!</h3>
+            <p className="text-white/55 text-sm mt-1">
+              Order ID kamu — simpan untuk konfirmasi pembayaran.
+            </p>
+            <div className="my-5 mx-auto inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f1117] border border-[#F5A623]/40">
+              <span className="font-mono text-lg gold-text" data-testid="order-code-display">{orderCode}</span>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(orderCode);
+                  toast.success("Order ID disalin");
+                }}
+                className="text-white/60 hover:text-[#F5A623]"
+                data-testid="copy-order-code-btn"
+              >
+                <Copy size={15} />
+              </button>
+            </div>
+            <p className="text-sm text-white/60">
+              Mohon tunggu konfirmasi admin via <b>WhatsApp / Telegram</b>.
+            </p>
+            <Button
+              onClick={() => handleClose(false)}
+              data-testid="close-order-success-btn"
+              className="mt-5 bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold"
+            >
+              Tutup
+            </Button>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
