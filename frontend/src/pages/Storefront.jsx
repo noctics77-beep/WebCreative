@@ -3,6 +3,8 @@ import { useSearchParams } from "react-router-dom";
 import { api } from "@/lib/api";
 import ProductCard from "@/components/ProductCard";
 import OrderModal from "@/components/OrderModal";
+import TestimonialCarousel from "@/components/TestimonialCarousel";
+import UrgencySection from "@/components/UrgencySection";
 import { Sparkles, ShieldCheck, Zap } from "lucide-react";
 
 const HERO_BG =
@@ -105,6 +107,9 @@ export default function Storefront() {
         referral={referral}
         onClose={() => setSelected(null)}
       />
+
+      <TestimonialCarousel />
+      <UrgencySection />
     </div>
   );
 }

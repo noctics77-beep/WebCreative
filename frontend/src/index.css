@@ -137,3 +137,25 @@ input[type="number"]::-webkit-inner-spin-button {
 .fade-up {
     animation: fadeUp 0.6s ease forwards;
 }
+
+/* Marquee — testimonial auto scroll RTL */
+@keyframes marquee-rtl {
+    from {
+        transform: translateX(0);
+    }
+    to {
+        transform: translateX(-50%);
+    }
+}
+.marquee-track {
+    animation: marquee-rtl 50s linear infinite;
+    width: max-content;
+}
+.group:hover .marquee-track {
+    animation-play-state: paused;
+}
+@media (max-width: 768px) {
+    .marquee-track {
+        animation-duration: 40s;
+    }
+}
