@@ -576,31 +576,39 @@ function SettingsTab({ api }) {
       <p className="text-white/50 text-sm mt-1">
         Angka ini tampil di urgency section storefront. Update manual seiring bisnis berkembang.
       </p>
+      <div className="mt-4 p-3 rounded-lg bg-[#F5A623]/5 border border-[#F5A623]/20 text-xs text-white/65">
+        <b className="text-[#F5A623]">💡 Format bebas:</b> kamu boleh isi pakai apa aja —
+        misal <code className="text-white">"243+"</code>,{" "}
+        <code className="text-white">"1.2K+"</code>,{" "}
+        <code className="text-white">"10rb+"</code>,{" "}
+        <code className="text-white">"5.0/5"</code>, atau{" "}
+        <code className="text-white">"Rp 1.5jt"</code>. Animasi count-up akan otomatis menyesuaikan.
+      </div>
       <form onSubmit={save} className="space-y-4 mt-6">
-        <Field label='Produk Terjual (contoh: "243+")'>
+        <Field label="Produk Terjual">
           <Input
             data-testid="settings-products-sold-input"
             value={stats.products_sold}
             onChange={(e) => setStats({ ...stats, products_sold: e.target.value })}
-            placeholder="243+"
+            placeholder='Contoh: 243+ / 1.2K+ / 10rb+'
             className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
           />
         </Field>
-        <Field label='Mitra Aktif (contoh: "89+")'>
+        <Field label="Mitra Aktif">
           <Input
             data-testid="settings-active-partners-input"
             value={stats.active_partners}
             onChange={(e) => setStats({ ...stats, active_partners: e.target.value })}
-            placeholder="89+"
+            placeholder='Contoh: 89+ / 250+ / 1K+'
             className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
           />
         </Field>
-        <Field label='Rating Kepuasan (contoh: "4.9/5")'>
+        <Field label="Rating Kepuasan">
           <Input
             data-testid="settings-rating-input"
             value={stats.rating}
             onChange={(e) => setStats({ ...stats, rating: e.target.value })}
-            placeholder="4.9/5"
+            placeholder='Contoh: 4.9/5 / 5.0/5 / 98%'
             className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
           />
         </Field>
