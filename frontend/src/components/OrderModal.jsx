@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -28,6 +28,19 @@ export default function OrderModal({ open, onClose, product, referral }) {
   const [loading, setLoading] = useState(false);
   const [orderCode, setOrderCode] = useState(null);
   const [discountInfo, setDiscountInfo] = useState(null); // {valid, percentage}
+  const [step, setStep] = useState("form"); // form | payment
+  const [paySettings, setPaySettings] = useState({ qris_url: "", bank_name: "", bank_account_number: "", bank_account_holder: "" });
+
+  useEffect(() => {
+    if (open) {
+      api.get("/stats").then((r) => setPaySettings({
+        qris_url: r.data.qris_url || "",
+        bank_name: r.data.bank_name || "",
+        bank_account_number: r.data.bank_account_number || "",
+        bank_account_holder: r.data.bank_account_holder || "",
+      })).catch(() => {});
+    }
+  }, [open]);
 
   if (!product) return null;
   const hasDiscount =
@@ -60,6 +73,10 @@ export default function OrderModal({ open, onClose, product, referral }) {
       toast.error("Mohon lengkapi nama dan kontak");
       return;
     }
+    setStep("payment");
+  };
+
+  const confirmPayment = async () => {
     setLoading(true);
     try {
       const res = await api.post("/orders", {
@@ -82,6 +99,7 @@ export default function OrderModal({ open, onClose, product, referral }) {
     if (!v) {
       setOrderCode(null);
       setDiscountInfo(null);
+      setStep("form");
       setForm({ buyer_name: "", contact: "", payment_method: "qris", discount_code: "" });
       onClose();
     }
@@ -93,7 +111,7 @@ export default function OrderModal({ open, onClose, product, referral }) {
         data-testid="order-modal"
         className="bg-[#1a1d27] border border-white/10 text-white sm:max-w-[480px]"
       >
-        {!orderCode ? (
+        {!orderCode && step === "form" ? (
           <>
             <DialogHeader>
               <DialogTitle className="font-display text-2xl">
@@ -210,11 +228,67 @@ export default function OrderModal({ open, onClose, product, referral }) {
                   disabled={loading}
                   className="w-full bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold"
                 >
-                  {loading ? <Loader2 className="animate-spin" size={16} /> : "Kirim Pesanan"}
+                  {loading ? <Loader2 className="animate-spin" size={16} /> : "Lanjut ke Pembayaran"}
                 </Button>
               </DialogFooter>
             </form>
           </>
+        ) : step === "payment" && !orderCode ? (
+          <div data-testid="payment-step" className="space-y-4">
+            <DialogHeader>
+              <DialogTitle className="font-display text-2xl">
+                Pembayaran <span className="gold-text">{form.payment_method.toUpperCase()}</span>
+              </DialogTitle>
+              <DialogDescription className="text-white/55">
+                Transfer sesuai total bayar di bawah, lalu klik &quot;Saya Sudah Bayar&quot;.
+              </DialogDescription>
+            </DialogHeader>
+
+            {form.payment_method === "qris" ? (
+              paySettings.qris_url ? (
+                <div className="text-center">
+                  <img src={paySettings.qris_url} alt="QRIS" data-testid="qris-image"
+                    className="mx-auto max-w-[260px] w-full rounded-xl border border-white/10 bg-white p-3" />
+                  <p className="text-xs text-white/50 mt-2">Scan QRIS di atas dengan aplikasi e-wallet/bank kamu.</p>
+                </div>
+              ) : (
+                <div className="text-center text-white/55 text-sm py-6 border border-dashed border-white/10 rounded-xl">
+                  Admin belum mengatur QRIS. Hubungi admin untuk metode pembayaran lain.
+                </div>
+              )
+            ) : (
+              <div className="rounded-xl border border-[#F5A623]/30 bg-[#F5A623]/5 p-4 space-y-2" data-testid="bank-info">
+                <div className="flex justify-between text-sm">
+                  <span className="text-white/55">Bank</span>
+                  <b className="text-white">{paySettings.bank_name || "-"}</b>
+                </div>
+                <div className="flex justify-between items-center text-sm">
+                  <span className="text-white/55">No. Rekening</span>
+                  <b className="font-mono gold-text text-base">{paySettings.bank_account_number || "-"}</b>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-white/55">Atas Nama</span>
+                  <b className="text-white">{paySettings.bank_account_holder || "-"}</b>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between pt-2 border-t border-white/5">
+              <span className="text-white/55 text-sm">Total Bayar</span>
+              <span className="font-display text-xl gold-text font-semibold">{formatIDR(finalPrice)}</span>
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <Button type="button" onClick={() => setStep("form")} data-testid="back-to-form-btn"
+                className="flex-1 bg-white/5 hover:bg-white/10 text-white border border-white/15">
+                Kembali
+              </Button>
+              <Button type="button" onClick={confirmPayment} disabled={loading} data-testid="confirm-payment-btn"
+                className="flex-1 bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold">
+                {loading ? <Loader2 className="animate-spin" size={16} /> : "Saya Sudah Bayar"}
+              </Button>
+            </div>
+          </div>
         ) : (
           <div className="text-center py-4" data-testid="order-success">
             <div className="mx-auto w-14 h-14 rounded-full bg-[#10b981]/15 flex items-center justify-center mb-3">

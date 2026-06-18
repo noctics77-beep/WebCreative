@@ -648,6 +648,10 @@ function SettingsTab({ api }) {
     live_feed_enabled: true,
     loyalty_discount_percent: 10,
     live_feed_names: [],
+    qris_url: "",
+    bank_name: "",
+    bank_account_number: "",
+    bank_account_holder: "",
   });
   const [namesText, setNamesText] = useState("");
   const [loading, setLoading] = useState(true);
@@ -673,6 +677,10 @@ function SettingsTab({ api }) {
         online_base: parseInt(stats.online_base, 10) || 50,
         loyalty_discount_percent: Math.max(1, Math.min(100, parseInt(stats.loyalty_discount_percent, 10) || 10)),
         live_feed_names: namesArr,
+        qris_url: stats.qris_url || "",
+        bank_name: stats.bank_name || "",
+        bank_account_number: stats.bank_account_number || "",
+        bank_account_holder: stats.bank_account_holder || "",
       });
       setStats(res.data);
       toast.success("Pengaturan berhasil disimpan");
@@ -786,6 +794,49 @@ function SettingsTab({ api }) {
             onChange={(e) => setNamesText(e.target.value)}
             placeholder="Andi, Budi, Cinta, Dewi, ..."
             className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
+          />
+        </Field>
+
+        <h3 className="font-display text-lg pt-4">Pengaturan Pembayaran</h3>
+        <Field label="URL Gambar QRIS">
+          <Input
+            data-testid="settings-qris-url-input"
+            value={stats.qris_url || ""}
+            onChange={(e) => setStats({ ...stats, qris_url: e.target.value })}
+            placeholder="https://..."
+            className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
+          />
+        </Field>
+        {stats.qris_url && (
+          <img src={stats.qris_url} alt="QRIS Preview" className="max-w-[180px] rounded-lg border border-white/10 bg-white p-2" />
+        )}
+        <div className="grid sm:grid-cols-2 gap-3">
+          <Field label="Nama Bank">
+            <Input
+              data-testid="settings-bank-name-input"
+              value={stats.bank_name || ""}
+              onChange={(e) => setStats({ ...stats, bank_name: e.target.value })}
+              placeholder="BCA / Mandiri / BRI"
+              className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
+            />
+          </Field>
+          <Field label="Nomor Rekening">
+            <Input
+              data-testid="settings-bank-number-input"
+              value={stats.bank_account_number || ""}
+              onChange={(e) => setStats({ ...stats, bank_account_number: e.target.value })}
+              placeholder="1234567890"
+              className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623] font-mono"
+            />
+          </Field>
+        </div>
+        <Field label="Nama Pemilik Rekening">
+          <Input
+            data-testid="settings-bank-holder-input"
+            value={stats.bank_account_holder || ""}
+            onChange={(e) => setStats({ ...stats, bank_account_holder: e.target.value })}
+            placeholder="NAMA SESUAI BUKU TABUNGAN"
+            className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623] uppercase"
           />
         </Field>
       </div>

@@ -202,6 +202,10 @@ DEFAULT_STATS = {
         "Oka", "Putra", "Rina", "Sari", "Tio", "Umar", "Vina",
         "Wahyu", "Yanto", "Zaki", "Bagas", "Citra", "Doni",
     ],
+    "qris_url": "",
+    "bank_name": "BCA",
+    "bank_account_number": "",
+    "bank_account_holder": "",
 }
 
 
@@ -221,6 +225,10 @@ class StatsUpdate(BaseModel):
     live_feed_enabled: bool = True
     loyalty_discount_percent: int = 10
     live_feed_names: List[str] = []
+    qris_url: str = ""
+    bank_name: str = ""
+    bank_account_number: str = ""
+    bank_account_holder: str = ""
 
 
 @api_router.put("/admin/stats")
@@ -276,14 +284,15 @@ async def create_order(payload: OrderCreate):
     await db.orders.insert_one(order.model_dump())
 
     msg = (
-        f"<b>🛒 Pesanan Baru</b>\n\n"
+        f"<b>🛒 Pesanan Baru — Menunggu Verifikasi Pembayaran</b>\n\n"
         f"<b>Order:</b> {order.order_code}\n"
         f"<b>Nama:</b> {order.buyer_name}\n"
         f"<b>Kontak:</b> {order.contact}\n"
         f"<b>Produk:</b> {order.product_name}\n"
         f"<b>Harga:</b> Rp {int(price):,}\n"
         f"<b>Pembayaran:</b> {order.payment_method.upper()}\n"
-        f"<b>Referral:</b> {referral or '-'}"
+        f"<b>Referral:</b> {referral or '-'}\n\n"
+        f"⏳ Cek mutasi/bukti transfer, lalu konfirmasi di admin panel."
     )
     await send_telegram(msg)
     return {"order_code": order.order_code, "id": order.id}
