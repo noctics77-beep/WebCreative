@@ -7,6 +7,7 @@ import logging
 import random
 import string
 import httpx
+import bcrypt
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional
@@ -66,8 +67,29 @@ async def send_telegram(message: str):
         logger.error(f"Telegram send failed: {e}")
 
 
-def verify_admin(x_admin_password: Optional[str]):
-    if not x_admin_password or x_admin_password != ADMIN_PASSWORD:
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(plain: str, hashed: str) -> bool:
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+    except Exception:
+        return False
+
+
+async def _check_admin_password(plain: str) -> bool:
+    """Verify against stored bcrypt hash if set, else fall back to env ADMIN_PASSWORD."""
+    if not plain:
+        return False
+    doc = await db.settings.find_one({"id": "admin_auth"}, {"_id": 0})
+    if doc and doc.get("password_hash"):
+        return verify_password(plain, doc["password_hash"])
+    return plain == ADMIN_PASSWORD
+
+
+async def verify_admin(x_admin_password: Optional[str]):
+    if not await _check_admin_password(x_admin_password):
         raise HTTPException(status_code=401, detail="Password admin salah")
 
 
@@ -240,7 +262,7 @@ class StatsUpdate(BaseModel):
 
 @api_router.put("/admin/stats")
 async def admin_update_stats(payload: StatsUpdate, x_admin_password: Optional[str] = Header(None)):
-    verify_admin(x_admin_password)
+    await verify_admin(x_admin_password)
     data = {"id": "stats", **payload.model_dump()}
     await db.settings.update_one({"id": "stats"}, {"$set": data}, upsert=True)
     return {k: data[k] for k in DEFAULT_STATS.keys()}
@@ -492,14 +514,37 @@ async def request_withdrawal(payload: WithdrawalCreate):
 # ---------- Admin ----------
 @api_router.post("/admin/login")
 async def admin_login(payload: AdminLogin):
-    if payload.password != ADMIN_PASSWORD:
+    if not await _check_admin_password(payload.password):
         raise HTTPException(401, "Password salah")
+    return {"ok": True}
+
+
+class ChangePassword(BaseModel):
+    old_password: str
+    new_password: str
+    confirm_password: str
+
+
+@api_router.post("/admin/change-password")
+async def admin_change_password(payload: ChangePassword, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    if not await _check_admin_password(payload.old_password):
+        raise HTTPException(400, "Password lama salah")
+    if payload.new_password != payload.confirm_password:
+        raise HTTPException(400, "Konfirmasi password tidak cocok")
+    if len(payload.new_password) < 8:
+        raise HTTPException(400, "Password baru minimal 8 karakter")
+    await db.settings.update_one(
+        {"id": "admin_auth"},
+        {"$set": {"id": "admin_auth", "password_hash": hash_password(payload.new_password)}},
+        upsert=True,
+    )
     return {"ok": True}
 
 
 @api_router.post("/admin/products")
 async def admin_create_product(payload: ProductCreate, x_admin_password: Optional[str] = Header(None)):
-    verify_admin(x_admin_password)
+    await verify_admin(x_admin_password)
     p = Product(**payload.model_dump())
     await db.products.insert_one(p.model_dump())
     return p.model_dump()
@@ -507,7 +552,7 @@ async def admin_create_product(payload: ProductCreate, x_admin_password: Optiona
 
 @api_router.put("/admin/products/{product_id}")
 async def admin_update_product(product_id: str, payload: ProductCreate, x_admin_password: Optional[str] = Header(None)):
-    verify_admin(x_admin_password)
+    await verify_admin(x_admin_password)
     await db.products.update_one({"id": product_id}, {"$set": payload.model_dump()})
     p = await db.products.find_one({"id": product_id}, {"_id": 0})
     if not p:
@@ -517,20 +562,20 @@ async def admin_update_product(product_id: str, payload: ProductCreate, x_admin_
 
 @api_router.delete("/admin/products/{product_id}")
 async def admin_delete_product(product_id: str, x_admin_password: Optional[str] = Header(None)):
-    verify_admin(x_admin_password)
+    await verify_admin(x_admin_password)
     r = await db.products.delete_one({"id": product_id})
     return {"deleted": r.deleted_count}
 
 
 @api_router.get("/admin/orders")
 async def admin_list_orders(x_admin_password: Optional[str] = Header(None)):
-    verify_admin(x_admin_password)
+    await verify_admin(x_admin_password)
     return await db.orders.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
 
 
 @api_router.patch("/admin/orders/{order_id}/status")
 async def admin_update_order_status(order_id: str, payload: StatusUpdate, x_admin_password: Optional[str] = Header(None)):
-    verify_admin(x_admin_password)
+    await verify_admin(x_admin_password)
     if payload.status not in ("confirmed", "cancelled"):
         raise HTTPException(400, "Status tidak valid")
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
@@ -558,7 +603,7 @@ async def admin_update_order_status(order_id: str, payload: StatusUpdate, x_admi
 
 @api_router.get("/admin/affiliates")
 async def admin_list_affiliates(x_admin_password: Optional[str] = Header(None)):
-    verify_admin(x_admin_password)
+    await verify_admin(x_admin_password)
     affs = await db.affiliates.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
     # total sales per affiliate
     for a in affs:
@@ -571,13 +616,13 @@ async def admin_list_affiliates(x_admin_password: Optional[str] = Header(None)):
 
 @api_router.get("/admin/withdrawals")
 async def admin_list_withdrawals(x_admin_password: Optional[str] = Header(None)):
-    verify_admin(x_admin_password)
+    await verify_admin(x_admin_password)
     return await db.withdrawals.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
 
 
 @api_router.patch("/admin/withdrawals/{wd_id}/status")
 async def admin_update_withdrawal(wd_id: str, payload: StatusUpdate, x_admin_password: Optional[str] = Header(None)):
-    verify_admin(x_admin_password)
+    await verify_admin(x_admin_password)
     if payload.status not in ("approved", "rejected"):
         raise HTTPException(400, "Status tidak valid")
     wd = await db.withdrawals.find_one({"id": wd_id}, {"_id": 0})
@@ -740,7 +785,7 @@ async def discount_validate(code: str):
 
 @api_router.get("/admin/loyalty/members")
 async def admin_loyalty_members(x_admin_password: Optional[str] = Header(None)):
-    verify_admin(x_admin_password)
+    await verify_admin(x_admin_password)
     members = await db.loyalty_members.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
     for m in members:
         rows = await db.checkins.find({"member_id": m["id"]}, {"_id": 0, "checkin_date": 1}).to_list(500)
@@ -750,7 +795,7 @@ async def admin_loyalty_members(x_admin_password: Optional[str] = Header(None)):
 
 @api_router.get("/admin/loyalty/codes")
 async def admin_loyalty_codes(x_admin_password: Optional[str] = Header(None)):
-    verify_admin(x_admin_password)
+    await verify_admin(x_admin_password)
     return await db.discount_codes.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
 
 

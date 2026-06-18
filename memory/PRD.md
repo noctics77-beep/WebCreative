@@ -35,6 +35,13 @@ Full-stack "CreativeStore" web app — Indonesian-language digital-goods storefr
 - P2: Payment gateway integration (real QRIS/Midtrans) instead of manual confirmation
 - P2: Product detail page with full description + screenshots gallery
 
+## Ganti Password Admin (Jun 18, 2026 — DONE)
+- Tab baru "Keamanan" di Admin Panel: Password Lama, Password Baru, Konfirmasi Password Baru.
+- Validasi (frontend + backend): password lama harus benar, baru == konfirmasi, min 8 karakter.
+- `POST /api/admin/change-password` (header X-Admin-Password) → simpan bcrypt hash di `settings` doc `id="admin_auth"`.
+- Login & `verify_admin` cek hash DB jika ada, fallback ke `.env ADMIN_PASSWORD`. Frontend update localStorage `cs_admin_pw` agar sesi lanjut tetap valid.
+- Tested: curl (semua validasi, login pw baru, tolak pw lama, protected route, bcrypt $2b$ tersimpan) + frontend e2e (toast "Password berhasil diubah").
+
 ## Next Tasks
 - Real payment gateway integration (Midtrans/Xendit)
 - Image upload (object storage) instead of URL-only

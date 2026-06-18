@@ -62,6 +62,11 @@ export default function AdminPanel() {
     setAuthed(false);
   };
 
+  const handlePasswordChanged = (newPw) => {
+    setPassword(newPw);
+    localStorage.setItem("cs_admin_pw", newPw);
+  };
+
   if (!authed) {
     return (
       <div data-testid="admin-login-page" className="max-w-md mx-auto px-4 pt-20 pb-24">
@@ -121,6 +126,7 @@ export default function AdminPanel() {
           <TabsTrigger value="withdrawals" data-testid="tab-withdrawals">WD</TabsTrigger>
           <TabsTrigger value="loyalty" data-testid="tab-loyalty">Loyalty</TabsTrigger>
           <TabsTrigger value="settings" data-testid="tab-settings">Settings</TabsTrigger>
+          <TabsTrigger value="security" data-testid="tab-security">Keamanan</TabsTrigger>
         </TabsList>
 
         <TabsContent value="products" className="mt-6">
@@ -140,6 +146,9 @@ export default function AdminPanel() {
         </TabsContent>
         <TabsContent value="settings" className="mt-6">
           <SettingsTab api={api} />
+        </TabsContent>
+        <TabsContent value="security" className="mt-6">
+          <ChangePasswordTab api={api} currentPassword={password} onPasswordChanged={handlePasswordChanged} />
         </TabsContent>
       </Tabs>
     </div>
@@ -833,6 +842,87 @@ function SettingsTab({ api }) {
           </Button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------- Change Password ----------
+function ChangePasswordTab({ api, currentPassword, onPasswordChanged }) {
+  const [form, setForm] = useState({ old_password: "", new_password: "", confirm_password: "" });
+  const [saving, setSaving] = useState(false);
+
+  const update = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!form.old_password || !form.new_password || !form.confirm_password) {
+      return toast.error("Mohon lengkapi semua field");
+    }
+    if (form.new_password !== form.confirm_password) {
+      return toast.error("Konfirmasi password tidak cocok");
+    }
+    if (form.new_password.length < 8) {
+      return toast.error("Password baru minimal 8 karakter");
+    }
+    setSaving(true);
+    try {
+      await api.post("/admin/change-password", form);
+      toast.success("Password berhasil diubah");
+      onPasswordChanged(form.new_password);
+      setForm({ old_password: "", new_password: "", confirm_password: "" });
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Gagal mengubah password");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="glass rounded-2xl p-6 max-w-md" data-testid="change-password-card">
+      <h3 className="font-display text-lg">Ganti Password Admin</h3>
+      <p className="text-white/50 text-sm mt-1">
+        Password baru langsung berlaku untuk login admin berikutnya dan disimpan ter-enkripsi.
+      </p>
+      <form onSubmit={submit} className="space-y-4 mt-6">
+        <Field label="Password Lama">
+          <Input
+            type="password"
+            data-testid="old-password-input"
+            value={form.old_password}
+            onChange={update("old_password")}
+            placeholder="••••••••"
+            className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
+          />
+        </Field>
+        <Field label="Password Baru (min. 8 karakter)">
+          <Input
+            type="password"
+            data-testid="new-password-input"
+            value={form.new_password}
+            onChange={update("new_password")}
+            placeholder="••••••••"
+            className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
+          />
+        </Field>
+        <Field label="Konfirmasi Password Baru">
+          <Input
+            type="password"
+            data-testid="confirm-password-input"
+            value={form.confirm_password}
+            onChange={update("confirm_password")}
+            placeholder="••••••••"
+            className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
+          />
+        </Field>
+        <Button
+          type="submit"
+          data-testid="change-password-submit-btn"
+          disabled={saving}
+          className="w-full bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold"
+        >
+          {saving ? <Loader2 className="animate-spin" size={15} /> : "Ubah Password"}
+        </Button>
+      </form>
     </div>
   );
 }
