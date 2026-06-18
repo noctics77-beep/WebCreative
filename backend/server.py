@@ -11,7 +11,9 @@ from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from fastapi import Request
+import pakasir
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -106,11 +108,20 @@ class Order(BaseModel):
     product_id: str
     product_name: str
     product_price: float
-    payment_method: str  # qris | transfer
+    payment_method: str  # qris | transfer | qris_otomatis
     referral_affiliate_code: Optional[str] = None
-    status: str = "pending"  # pending | confirmed | cancelled
+    status: str = "pending"  # pending | confirmed | cancelled | expired
     commission_amount: float = 0.0
     created_at: str = Field(default_factory=now_iso)
+    # Pakasir automated QRIS fields
+    pakasir_amount: Optional[int] = None
+    pakasir_total: Optional[float] = None
+    pakasir_fee: Optional[float] = None
+    pakasir_qr_string: Optional[str] = None
+    pakasir_status: Optional[str] = None  # pending | completed | expired
+    expires_at: Optional[str] = None
+    paid_via: Optional[str] = None
+    paid_at: Optional[str] = None
 
 
 class OrderCreate(BaseModel):
@@ -277,6 +288,25 @@ async def create_order(payload: OrderCreate):
         referral_affiliate_code=referral,
         commission_amount=commission,
     )
+
+    qr_image = None
+    if payload.payment_method == "qris_otomatis":
+        if not pakasir.is_configured():
+            raise HTTPException(503, "QRIS Otomatis belum dikonfigurasi. Pilih metode lain.")
+        amount_int = int(round(price))
+        try:
+            pay = await pakasir.create_qris(order.order_code, amount_int)
+        except Exception as e:
+            logger.error(f"Pakasir create failed: {e}")
+            raise HTTPException(502, "Gagal membuat QRIS otomatis. Coba lagi sebentar.")
+        order.pakasir_amount = amount_int
+        order.pakasir_total = float(pay.get("total_payment", amount_int))
+        order.pakasir_fee = float(pay.get("fee", 0))
+        order.pakasir_qr_string = pay.get("payment_number")
+        order.pakasir_status = "pending"
+        order.expires_at = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat()
+        qr_image = pakasir.qr_to_data_uri(order.pakasir_qr_string)
+
     await db.orders.insert_one(order.model_dump())
 
     msg = (
@@ -291,7 +321,108 @@ async def create_order(payload: OrderCreate):
         f"⏳ Cek mutasi/bukti transfer, lalu konfirmasi di admin panel."
     )
     await send_telegram(msg)
-    return {"order_code": order.order_code, "id": order.id}
+    return {
+        "order_code": order.order_code,
+        "id": order.id,
+        "payment_method": order.payment_method,
+        "qr_image": qr_image,
+        "pakasir_total": order.pakasir_total,
+        "pakasir_fee": order.pakasir_fee,
+        "expires_at": order.expires_at,
+    }
+
+
+async def _settle_paid_order(order_code: str) -> bool:
+    """Idempotently mark a Pakasir order as paid + pay commission + notify. Returns True if newly settled."""
+    res = await db.orders.update_one(
+        {"order_code": order_code, "status": {"$ne": "confirmed"}},
+        {"$set": {
+            "status": "confirmed",
+            "pakasir_status": "completed",
+            "paid_via": "pakasir_auto",
+            "paid_at": now_iso(),
+        }},
+    )
+    if res.modified_count != 1:
+        return False  # already settled or not found
+    order = await db.orders.find_one({"order_code": order_code}, {"_id": 0})
+    if order and order.get("referral_affiliate_code") and order.get("commission_amount", 0) > 0:
+        await db.affiliates.update_one(
+            {"affiliate_code": order["referral_affiliate_code"]},
+            {"$inc": {
+                "balance": order["commission_amount"],
+                "total_earned": order["commission_amount"],
+            }},
+        )
+    await send_telegram(
+        f"<b>✅ Lunas — Terverifikasi Otomatis (QRIS)</b>\n\n"
+        f"<b>Order:</b> {order['order_code']}\n"
+        f"<b>Nama:</b> {order['buyer_name']}\n"
+        f"<b>Produk:</b> {order['product_name']}\n"
+        f"<b>Total:</b> Rp {int(order.get('pakasir_total') or order['product_price']):,}\n"
+        f"<b>Referral:</b> {order.get('referral_affiliate_code') or '-'}"
+    )
+    return True
+
+
+@api_router.get("/orders/{order_code}/status")
+async def order_status(order_code: str):
+    order = await db.orders.find_one({"order_code": order_code}, {"_id": 0})
+    if not order:
+        raise HTTPException(404, "Order tidak ditemukan")
+
+    if order["status"] == "confirmed":
+        return {"status": "paid"}
+    if order.get("pakasir_status") == "expired" or order["status"] == "expired":
+        return {"status": "expired"}
+
+    # Only relevant for automated QRIS
+    if order.get("payment_method") != "qris_otomatis":
+        return {"status": order["status"]}
+
+    # Check expiry (15 min window)
+    expired = False
+    if order.get("expires_at"):
+        try:
+            expired = datetime.now(timezone.utc) >= datetime.fromisoformat(order["expires_at"])
+        except Exception:
+            expired = False
+
+    # Verify against Pakasir authoritative status
+    txn = await pakasir.get_transaction(order_code, order.get("pakasir_amount") or 0)
+    if txn and txn.get("status") == "completed":
+        await _settle_paid_order(order_code)
+        return {"status": "paid"}
+
+    if expired:
+        await db.orders.update_one(
+            {"order_code": order_code, "status": "pending"},
+            {"$set": {"status": "expired", "pakasir_status": "expired"}},
+        )
+        await pakasir.cancel_transaction(order_code, order.get("pakasir_amount") or 0)
+        return {"status": "expired"}
+
+    return {"status": "pending", "expires_at": order.get("expires_at")}
+
+
+@api_router.post("/pakasir/webhook")
+async def pakasir_webhook(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False}
+    order_id = body.get("order_id")
+    amount = body.get("amount")
+    status = body.get("status")
+    if not order_id or status != "completed":
+        return {"ok": True}
+    # Re-verify with authoritative API before settling (webhook is unsigned)
+    txn = await pakasir.get_transaction(order_id, int(amount) if amount else 0)
+    if txn and txn.get("status") == "completed":
+        await _settle_paid_order(order_id)
+    else:
+        logger.warning(f"Pakasir webhook for {order_id} could not be verified")
+    return {"ok": True}
 
 
 # ---------- Public: Affiliates ----------

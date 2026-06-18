@@ -39,3 +39,14 @@ Full-stack "CreativeStore" web app — Indonesian-language digital-goods storefr
 - Real payment gateway integration (Midtrans/Xendit)
 - Image upload (object storage) instead of URL-only
 - Email receipt to buyer
+
+## Pakasir Automated QRIS (Jun 18, 2026 — DONE)
+- New payment method `qris_otomatis` alongside QRIS Manual & Transfer Bank.
+- Backend `/app/backend/pakasir.py`: create_qris, get_transaction (authoritative verification), cancel_transaction, qr_to_data_uri (qrcode lib).
+- `POST /api/orders` with `qris_otomatis` → calls Pakasir `transactioncreate/qris` (LIVE/production project), stores qr string/total/fee, sets 15-min `expires_at`, returns base64 QR image.
+- `GET /api/orders/{order_code}/status` → polled by frontend; verifies via Pakasir transactiondetail, settles on "completed", auto-expires after 15 min (cancels Pakasir txn, no reuse).
+- `POST /api/pakasir/webhook` → re-verifies via transactiondetail before settling (webhook is unsigned per docs).
+- `_settle_paid_order()` → idempotent: marks confirmed + pays affiliate commission once + Telegram "Lunas - Terverifikasi Otomatis". Unit tested in `tests/test_pakasir_settle.py`.
+- Frontend `OrderModal.jsx`: dynamic QR display, 15-min countdown, 4s status polling, expired/new-order UI, auto success screen.
+- WEBHOOK URL to register in Pakasir dashboard (Edit Proyek): `{APP_URL}/api/pakasir/webhook` (use the DEPLOYED url, not preview).
+- Tested: real Pakasir API create + status (curl), settlement idempotency (pytest), frontend QR/countdown (screenshot e2e). Could NOT simulate real payment (project is in production mode, simulation disabled).
