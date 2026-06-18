@@ -1,0 +1,13 @@
+{
+  "database": "creativestore_db",
+  "exported_at": "2026-06-18T06:56:42.178549Z",
+  "collections": {
+    "affiliates": 1,
+    "checkins": 1,
+    "loyalty_members": 1,
+    "orders": 8,
+    "products": 9,
+    "settings": 2,
+    "withdrawals": 2
+  }
+}

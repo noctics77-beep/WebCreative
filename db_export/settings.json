@@ -1,0 +1,34 @@
+[
+  {
+    "_id": "6a282a0c10c5e72231d70157",
+    "id": "stats",
+    "active_partners": "89+",
+    "products_sold": "243+",
+    "rating": "4.9/5",
+    "live_feed_enabled": true,
+    "live_feed_names": [
+      "Andi",
+      "Budi",
+      "Cinta",
+      "Dewi",
+      "Eka",
+      "Joko",
+      "Maya",
+      "Rina",
+      "Tio",
+      "Vina"
+    ],
+    "loyalty_discount_percent": 10,
+    "online_base": 50,
+    "bank_account_holder": "",
+    "bank_account_number": "",
+    "bank_name": "BCA",
+    "qris_url": "",
+    "bank_accounts": []
+  },
+  {
+    "_id": "6a338cb8de3cda832b80f030",
+    "id": "admin_auth",
+    "password_hash": "$2b$12$t3aRXOinEoi5kqHNV.WSdO.0Himkjl2aWvLt78YsKQxFUBtafvn.q"
+  }
+]
