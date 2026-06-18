@@ -195,6 +195,7 @@ DEFAULT_STATS = {
     "rating": "4.9/5",
     "online_base": 50,
     "live_feed_enabled": True,
+    "loyalty_discount_percent": 10,
     "live_feed_names": [
         "Andi", "Budi", "Cinta", "Dewi", "Eka", "Fajar", "Gita",
         "Hadi", "Indra", "Joko", "Kirana", "Lutfi", "Maya", "Nanda",
@@ -218,6 +219,7 @@ class StatsUpdate(BaseModel):
     rating: str
     online_base: int = 50
     live_feed_enabled: bool = True
+    loyalty_discount_percent: int = 10
     live_feed_names: List[str] = []
 
 
@@ -550,6 +552,9 @@ async def loyalty_checkin(payload: CheckinPayload):
 
     new_code = None
     if streak > 0 and streak % 7 == 0:
+        # Read current discount percentage from settings
+        settings_doc = await db.settings.find_one({"id": "stats"}, {"_id": 0}) or {}
+        pct = int(settings_doc.get("loyalty_discount_percent", 10))
         code = _gen_disc_code()
         while await db.discount_codes.find_one({"code": code}):
             code = _gen_disc_code()
@@ -559,7 +564,7 @@ async def loyalty_checkin(payload: CheckinPayload):
             "member_name": member["name"],
             "member_whatsapp": member["whatsapp"],
             "code": code,
-            "percentage": 10,
+            "percentage": pct,
             "used": False,
             "created_at": now_iso(),
         }

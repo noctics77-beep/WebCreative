@@ -646,6 +646,7 @@ function SettingsTab({ api }) {
     rating: "",
     online_base: 50,
     live_feed_enabled: true,
+    loyalty_discount_percent: 10,
     live_feed_names: [],
   });
   const [namesText, setNamesText] = useState("");
@@ -670,6 +671,7 @@ function SettingsTab({ api }) {
       const res = await api.put("/admin/stats", {
         ...stats,
         online_base: parseInt(stats.online_base, 10) || 50,
+        loyalty_discount_percent: Math.max(1, Math.min(100, parseInt(stats.loyalty_discount_percent, 10) || 10)),
         live_feed_names: namesArr,
       });
       setStats(res.data);
@@ -748,6 +750,23 @@ function SettingsTab({ api }) {
             className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
           />
         </Field>
+
+        <h3 className="font-display text-lg pt-2">Loyalty Program</h3>
+        <Field label="Persentase Diskon Kode Loyalty (1–100)">
+          <Input
+            data-testid="settings-loyalty-discount-input"
+            type="number"
+            min="1"
+            max="100"
+            value={stats.loyalty_discount_percent}
+            onChange={(e) => setStats({ ...stats, loyalty_discount_percent: e.target.value })}
+            placeholder="10"
+            className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
+          />
+        </Field>
+        <p className="text-[11px] text-white/40 -mt-2">
+          Diskon ini diterapkan ke kode baru yang di-generate setelah 7 hari streak. Kode lama tetap pakai % saat dibuat.
+        </p>
 
         <h3 className="font-display text-lg pt-2">Live Activity Feed</h3>
         <div className="flex items-center justify-between px-3 py-2 rounded-md bg-[#0f1117] border border-white/10">

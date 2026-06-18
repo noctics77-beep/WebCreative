@@ -15,6 +15,11 @@ export default function LoyaltyPage() {
   const [loading, setLoading] = useState(false);
   const [checking, setChecking] = useState(false);
   const [tab, setTab] = useState("checkin"); // checkin | check
+  const [discountPct, setDiscountPct] = useState(10);
+
+  useEffect(() => {
+    api.get("/stats").then((r) => setDiscountPct(r.data.loyalty_discount_percent || 10)).catch(() => {});
+  }, []);
 
   const loadMember = async (whatsapp) => {
     setLoading(true);
@@ -77,7 +82,7 @@ export default function LoyaltyPage() {
         </div>
         <h1 className="font-display text-4xl md:text-5xl">Poin <span className="gold-text">Harian</span></h1>
         <p className="text-white/55 mt-3 text-sm">
-          Check-in tiap hari 7 hari berturut-turut, dapat <b className="text-white">kode diskon 10%</b>.
+          Check-in tiap hari 7 hari berturut-turut, dapat <b className="text-white">kode diskon {discountPct}%</b>.
         </p>
       </div>
 
