@@ -605,12 +605,14 @@ async def admin_update_order_status(order_id: str, payload: StatusUpdate, x_admi
 async def admin_list_affiliates(x_admin_password: Optional[str] = Header(None)):
     await verify_admin(x_admin_password)
     affs = await db.affiliates.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
-    # total sales per affiliate
+    # total sales per affiliate (single aggregation, avoids N+1)
+    pipeline = [
+        {"$match": {"status": "confirmed"}},
+        {"$group": {"_id": "$referral_affiliate_code", "count": {"$sum": 1}}},
+    ]
+    sales_map = {r["_id"]: r["count"] for r in await db.orders.aggregate(pipeline).to_list(5000)}
     for a in affs:
-        count = await db.orders.count_documents(
-            {"referral_affiliate_code": a["affiliate_code"], "status": "confirmed"}
-        )
-        a["total_sales"] = count
+        a["total_sales"] = sales_map.get(a["affiliate_code"], 0)
     return affs
 
 
@@ -787,9 +789,15 @@ async def discount_validate(code: str):
 async def admin_loyalty_members(x_admin_password: Optional[str] = Header(None)):
     await verify_admin(x_admin_password)
     members = await db.loyalty_members.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    member_ids = [m["id"] for m in members]
+    all_checkins = await db.checkins.find(
+        {"member_id": {"$in": member_ids}}, {"_id": 0, "member_id": 1, "checkin_date": 1}
+    ).to_list(50000)
+    checkins_map = {}
+    for c in all_checkins:
+        checkins_map.setdefault(c["member_id"], []).append(c["checkin_date"])
     for m in members:
-        rows = await db.checkins.find({"member_id": m["id"]}, {"_id": 0, "checkin_date": 1}).to_list(500)
-        m["streak"] = _calc_streak([r["checkin_date"] for r in rows])
+        m["streak"] = _calc_streak(checkins_map.get(m["id"], []))
     return members
 
 
