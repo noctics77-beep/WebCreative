@@ -203,9 +203,7 @@ DEFAULT_STATS = {
         "Wahyu", "Yanto", "Zaki", "Bagas", "Citra", "Doni",
     ],
     "qris_url": "",
-    "bank_name": "BCA",
-    "bank_account_number": "",
-    "bank_account_holder": "",
+    "bank_accounts": [],
 }
 
 
@@ -226,9 +224,7 @@ class StatsUpdate(BaseModel):
     loyalty_discount_percent: int = 10
     live_feed_names: List[str] = []
     qris_url: str = ""
-    bank_name: str = ""
-    bank_account_number: str = ""
-    bank_account_holder: str = ""
+    bank_accounts: List[dict] = []
 
 
 @api_router.put("/admin/stats")

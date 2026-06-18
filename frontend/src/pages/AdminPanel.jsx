@@ -649,9 +649,7 @@ function SettingsTab({ api }) {
     loyalty_discount_percent: 10,
     live_feed_names: [],
     qris_url: "",
-    bank_name: "",
-    bank_account_number: "",
-    bank_account_holder: "",
+    bank_accounts: [],
   });
   const [namesText, setNamesText] = useState("");
   const [loading, setLoading] = useState(true);
@@ -678,9 +676,7 @@ function SettingsTab({ api }) {
         loyalty_discount_percent: Math.max(1, Math.min(100, parseInt(stats.loyalty_discount_percent, 10) || 10)),
         live_feed_names: namesArr,
         qris_url: stats.qris_url || "",
-        bank_name: stats.bank_name || "",
-        bank_account_number: stats.bank_account_number || "",
-        bank_account_holder: stats.bank_account_holder || "",
+        bank_accounts: stats.bank_accounts || [],
       });
       setStats(res.data);
       toast.success("Pengaturan berhasil disimpan");
@@ -810,35 +806,32 @@ function SettingsTab({ api }) {
         {stats.qris_url && (
           <img src={stats.qris_url} alt="QRIS Preview" className="max-w-[180px] rounded-lg border border-white/10 bg-white p-2" />
         )}
-        <div className="grid sm:grid-cols-2 gap-3">
-          <Field label="Nama Bank">
-            <Input
-              data-testid="settings-bank-name-input"
-              value={stats.bank_name || ""}
-              onChange={(e) => setStats({ ...stats, bank_name: e.target.value })}
-              placeholder="BCA / Mandiri / BRI"
-              className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
-            />
-          </Field>
-          <Field label="Nomor Rekening">
-            <Input
-              data-testid="settings-bank-number-input"
-              value={stats.bank_account_number || ""}
-              onChange={(e) => setStats({ ...stats, bank_account_number: e.target.value })}
-              placeholder="1234567890"
-              className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623] font-mono"
-            />
-          </Field>
+        <div className="space-y-2">
+          <Label className="text-xs uppercase tracking-widest text-white/60">Daftar Rekening Bank</Label>
+          {(stats.bank_accounts || []).map((b, i) => (
+            <div key={i} data-testid={`bank-row-${i}`} className="rounded-lg border border-white/10 bg-[#0f1117] p-3 grid grid-cols-1 sm:grid-cols-12 gap-2 items-center">
+              <Input data-testid={`bank-name-${i}`} placeholder="Bank" value={b.bank_name || ""}
+                onChange={(e) => { const a=[...stats.bank_accounts]; a[i]={...a[i], bank_name:e.target.value}; setStats({...stats, bank_accounts:a}); }}
+                className="sm:col-span-3 bg-[#1a1d27] border-white/10" />
+              <Input data-testid={`bank-num-${i}`} placeholder="Nomor Rekening" value={b.account_number || ""}
+                onChange={(e) => { const a=[...stats.bank_accounts]; a[i]={...a[i], account_number:e.target.value}; setStats({...stats, bank_accounts:a}); }}
+                className="sm:col-span-4 bg-[#1a1d27] border-white/10 font-mono" />
+              <Input data-testid={`bank-holder-${i}`} placeholder="Atas Nama" value={b.holder || ""}
+                onChange={(e) => { const a=[...stats.bank_accounts]; a[i]={...a[i], holder:e.target.value}; setStats({...stats, bank_accounts:a}); }}
+                className="sm:col-span-4 bg-[#1a1d27] border-white/10" />
+              <button type="button" data-testid={`delete-bank-${i}`}
+                onClick={() => { if (window.confirm(`Yakin hapus rekening ${b.bank_name||''} ${b.account_number||''}?`)) { const a=[...stats.bank_accounts]; a.splice(i,1); setStats({...stats, bank_accounts:a}); } }}
+                className="sm:col-span-1 p-2 rounded-md bg-red-500/10 hover:bg-red-500/20 text-red-300 flex items-center justify-center">
+                <Trash2 size={15} />
+              </button>
+            </div>
+          ))}
+          <Button type="button" data-testid="add-bank-btn"
+            onClick={() => setStats({ ...stats, bank_accounts: [...(stats.bank_accounts||[]), { bank_name:"", account_number:"", holder:"" }] })}
+            className="bg-white/5 hover:bg-white/10 text-white border border-white/15">
+            <Plus size={15} className="mr-1" /> Tambah Rekening
+          </Button>
         </div>
-        <Field label="Nama Pemilik Rekening">
-          <Input
-            data-testid="settings-bank-holder-input"
-            value={stats.bank_account_holder || ""}
-            onChange={(e) => setStats({ ...stats, bank_account_holder: e.target.value })}
-            placeholder="NAMA SESUAI BUKU TABUNGAN"
-            className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623] uppercase"
-          />
-        </Field>
       </div>
     </div>
   );

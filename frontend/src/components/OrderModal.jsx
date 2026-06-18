@@ -29,15 +29,13 @@ export default function OrderModal({ open, onClose, product, referral }) {
   const [orderCode, setOrderCode] = useState(null);
   const [discountInfo, setDiscountInfo] = useState(null); // {valid, percentage}
   const [step, setStep] = useState("form"); // form | payment
-  const [paySettings, setPaySettings] = useState({ qris_url: "", bank_name: "", bank_account_number: "", bank_account_holder: "" });
+  const [paySettings, setPaySettings] = useState({ qris_url: "", bank_accounts: [] });
 
   useEffect(() => {
     if (open) {
       api.get("/stats").then((r) => setPaySettings({
         qris_url: r.data.qris_url || "",
-        bank_name: r.data.bank_name || "",
-        bank_account_number: r.data.bank_account_number || "",
-        bank_account_holder: r.data.bank_account_holder || "",
+        bank_accounts: r.data.bank_accounts || [],
       })).catch(() => {});
     }
   }, [open]);
@@ -257,19 +255,18 @@ export default function OrderModal({ open, onClose, product, referral }) {
                 </div>
               )
             ) : (
-              <div className="rounded-xl border border-[#F5A623]/30 bg-[#F5A623]/5 p-4 space-y-2" data-testid="bank-info">
-                <div className="flex justify-between text-sm">
-                  <span className="text-white/55">Bank</span>
-                  <b className="text-white">{paySettings.bank_name || "-"}</b>
-                </div>
-                <div className="flex justify-between items-center text-sm">
-                  <span className="text-white/55">No. Rekening</span>
-                  <b className="font-mono gold-text text-base">{paySettings.bank_account_number || "-"}</b>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-white/55">Atas Nama</span>
-                  <b className="text-white">{paySettings.bank_account_holder || "-"}</b>
-                </div>
+              <div className="space-y-2" data-testid="bank-info">
+                {(paySettings.bank_accounts || []).length === 0 ? (
+                  <div className="text-center text-white/55 text-sm py-6 border border-dashed border-white/10 rounded-xl">
+                    Admin belum mengatur rekening. Hubungi admin.
+                  </div>
+                ) : (paySettings.bank_accounts || []).map((b, i) => (
+                  <div key={i} data-testid={`bank-account-${i}`} className="rounded-xl border border-[#F5A623]/30 bg-[#F5A623]/5 p-4 space-y-1">
+                    <div className="flex justify-between text-sm"><span className="text-white/55">Bank</span><b className="text-white">{b.bank_name}</b></div>
+                    <div className="flex justify-between items-center text-sm"><span className="text-white/55">No. Rekening</span><b className="font-mono gold-text text-base">{b.account_number}</b></div>
+                    <div className="flex justify-between text-sm"><span className="text-white/55">Atas Nama</span><b className="text-white">{b.holder}</b></div>
+                  </div>
+                ))}
               </div>
             )}
 
