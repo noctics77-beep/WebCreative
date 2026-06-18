@@ -37,6 +37,14 @@ export default function ProductCard({ product, onOrder }) {
       </div>
       <div className="p-5 flex flex-col flex-1">
         <h3 className="font-display text-lg text-white">{product.name}</h3>
+        {product.monthly_sold > 0 && (
+          <div
+            data-testid={`monthly-sold-${product.id}`}
+            className="text-sm text-[#F5A623] font-medium mt-1 flex items-center gap-1"
+          >
+            🔥 {product.monthly_sold} terjual bulan ini
+          </div>
+        )}
         <p className="text-sm text-white/55 mt-1 line-clamp-2 flex-1">
           {product.description}
         </p>

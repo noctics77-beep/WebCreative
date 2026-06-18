@@ -24,6 +24,7 @@ ADMIN_PASSWORD = os.environ["ADMIN_PASSWORD"]
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 ADMIN_WHATSAPP = os.environ.get("ADMIN_WHATSAPP", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -79,6 +80,7 @@ class Product(BaseModel):
     description: str
     commission_percent: float = 10.0
     stock_status: str = "available"  # available | unavailable
+    monthly_sold: int = 0
     created_at: str = Field(default_factory=now_iso)
 
 
@@ -91,6 +93,7 @@ class ProductCreate(BaseModel):
     description: str
     commission_percent: float = 10.0
     stock_status: str = "available"
+    monthly_sold: int = 0
 
 
 class Order(BaseModel):
@@ -188,6 +191,14 @@ DEFAULT_STATS = {
     "products_sold": "243+",
     "active_partners": "89+",
     "rating": "4.9/5",
+    "online_base": 50,
+    "live_feed_enabled": True,
+    "live_feed_names": [
+        "Andi", "Budi", "Cinta", "Dewi", "Eka", "Fajar", "Gita",
+        "Hadi", "Indra", "Joko", "Kirana", "Lutfi", "Maya", "Nanda",
+        "Oka", "Putra", "Rina", "Sari", "Tio", "Umar", "Vina",
+        "Wahyu", "Yanto", "Zaki", "Bagas", "Citra", "Doni",
+    ],
 }
 
 
@@ -203,6 +214,9 @@ class StatsUpdate(BaseModel):
     products_sold: str
     active_partners: str
     rating: str
+    online_base: int = 50
+    live_feed_enabled: bool = True
+    live_feed_names: List[str] = []
 
 
 @api_router.put("/admin/stats")
@@ -444,6 +458,53 @@ async def admin_update_withdrawal(wd_id: str, payload: StatusUpdate, x_admin_pas
 @api_router.get("/")
 async def root():
     return {"message": "CreativeStore API"}
+
+
+# ---------- Chat ----------
+CHAT_SYSTEM_PROMPT = """Kamu adalah Asisten CreativeStore — toko digital Indonesia yang menjual:
+- Akun AI premium (ChatGPT Plus, Claude Pro)
+- Tools premium (Canva Pro, Capcut Pro, Adobe)
+- Akun streaming (Netflix, Spotify, YouTube Premium)
+- Kursus & e-book digital
+
+Aturan jawaban:
+- SELALU jawab dalam Bahasa Indonesia yang ramah, santai, dan singkat (max 3-4 kalimat).
+- Pembayaran: QRIS atau Transfer Bank. Setelah pesan, admin konfirmasi via WhatsApp/Telegram.
+- Cara order: pilih produk → klik "Pesan Sekarang" → isi nama+kontak → pilih metode bayar → submit → catat Order ID (ORDXXXXXX) → tunggu konfirmasi admin.
+- Program Affiliate: gratis tanpa modal, komisi 10-15% per produk, daftar di halaman /partnership, login dashboard pakai Affiliate ID (AFFXXXXX).
+- Program Reseller: harga grosir, jual mandiri, hubungi admin via WhatsApp untuk daftar.
+- Jangan janjikan harga spesifik produk kecuali ditanya umum (harga selalu tampil di katalog).
+- Jika ditanya hal di luar CreativeStore, arahkan kembali ke produk/order/affiliate.
+- Gunakan emoji secukupnya untuk hangat (😊, 🔥, ✨)."""
+
+
+class ChatMessage(BaseModel):
+    message: str
+    session_id: Optional[str] = None
+
+
+@api_router.post("/chat")
+async def chat_endpoint(payload: ChatMessage):
+    if not GEMINI_API_KEY:
+        raise HTTPException(503, "AI chat belum dikonfigurasi. Hubungi admin.")
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+    except Exception as e:
+        raise HTTPException(500, f"Library error: {e}")
+
+    session_id = payload.session_id or str(uuid.uuid4())
+    chat = LlmChat(
+        api_key=GEMINI_API_KEY,
+        session_id=session_id,
+        system_message=CHAT_SYSTEM_PROMPT,
+    ).with_model("gemini", "gemini-2.5-flash")
+
+    try:
+        reply = await chat.send_message(UserMessage(text=payload.message))
+        return {"reply": str(reply), "session_id": session_id}
+    except Exception as e:
+        logger.error(f"Gemini error: {e}")
+        raise HTTPException(500, "Maaf, AI sedang sibuk. Coba lagi sebentar 🙏")
 
 
 app.include_router(api_router)

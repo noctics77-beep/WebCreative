@@ -7,6 +7,7 @@ import AffiliateDashboard from "@/pages/AffiliateDashboard";
 import AdminPanel from "@/pages/AdminPanel";
 import NavBar from "@/components/NavBar";
 import Footer from "@/components/Footer";
+import ChatWidget from "@/components/ChatWidget";
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
           <Route path="/admin" element={<AdminPanel />} />
         </Routes>
         <Footer />
+        <ChatWidget />
       </BrowserRouter>
       <Toaster
         theme="dark"

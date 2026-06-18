@@ -177,6 +177,7 @@ function ProductsTab({ api }) {
             <TableHead className="text-white/60">Produk</TableHead>
             <TableHead className="text-white/60">Harga</TableHead>
             <TableHead className="text-white/60">Komisi</TableHead>
+            <TableHead className="text-white/60">Terjual</TableHead>
             <TableHead className="text-white/60">Stok</TableHead>
             <TableHead className="text-white/60 text-right">Aksi</TableHead>
           </TableRow>
@@ -200,6 +201,9 @@ function ProductsTab({ api }) {
                   <div className="gold-text font-semibold">{formatIDR(has ? p.discount_price : p.original_price)}</div>
                 </TableCell>
                 <TableCell className="text-sm">{p.commission_percent}%</TableCell>
+                <TableCell className="text-sm">
+                  <span className="text-[#F5A623] font-medium">🔥 {p.monthly_sold || 0}</span>
+                </TableCell>
                 <TableCell>
                   <span className={`px-2 py-0.5 rounded-full text-[11px] border ${
                     p.stock_status === "available"
@@ -229,7 +233,7 @@ function ProductsTab({ api }) {
             );
           })}
           {items.length === 0 && (
-            <TableRow><TableCell colSpan={5} className="text-center text-white/40 py-6">Belum ada produk</TableCell></TableRow>
+            <TableRow><TableCell colSpan={6} className="text-center text-white/40 py-6">Belum ada produk</TableCell></TableRow>
           )}
         </TableBody>
       </Table>
@@ -253,6 +257,7 @@ function ProductFormDialog({ open, onOpenChange, editing, api, onSaved }) {
     ...editing,
     original_price: editing.original_price,
     discount_price: editing.discount_price || "",
+    monthly_sold: editing.monthly_sold || 0,
   } : {
     name: "",
     photo_url: "",
@@ -262,6 +267,7 @@ function ProductFormDialog({ open, onOpenChange, editing, api, onSaved }) {
     description: "",
     commission_percent: 10,
     stock_status: "available",
+    monthly_sold: 0,
   });
   const [saving, setSaving] = useState(false);
 
@@ -278,6 +284,7 @@ function ProductFormDialog({ open, onOpenChange, editing, api, onSaved }) {
       description: form.description,
       commission_percent: parseFloat(form.commission_percent),
       stock_status: form.stock_status,
+      monthly_sold: parseInt(form.monthly_sold || 0, 10),
     };
     try {
       if (editing) await api.put(`/admin/products/${editing.id}`, payload);
@@ -342,6 +349,17 @@ function ProductFormDialog({ open, onOpenChange, editing, api, onSaved }) {
               </Select>
             </Field>
           </div>
+          <Field label="Jumlah Terjual Bulan Ini (manual)">
+            <Input
+              data-testid="pf-monthly-sold"
+              type="number"
+              min="0"
+              value={form.monthly_sold}
+              onChange={(e) => setForm({ ...form, monthly_sold: e.target.value })}
+              placeholder="0"
+              className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
+            />
+          </Field>
           <DialogFooter>
             <Button type="submit" data-testid="pf-submit" disabled={saving} className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold">
               {saving ? <Loader2 className="animate-spin" size={15} /> : "Simpan"}
@@ -543,24 +561,40 @@ function WithdrawalsTab({ api }) {
 
 // ---------- Settings ----------
 function SettingsTab({ api }) {
-  const [stats, setStats] = useState({ products_sold: "", active_partners: "", rating: "" });
+  const [stats, setStats] = useState({
+    products_sold: "",
+    active_partners: "",
+    rating: "",
+    online_base: 50,
+    live_feed_enabled: true,
+    live_feed_names: [],
+  });
+  const [namesText, setNamesText] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    api.get("/stats").then((r) => setStats(r.data)).finally(() => setLoading(false));
+    api.get("/stats").then((r) => {
+      setStats(r.data);
+      setNamesText((r.data.live_feed_names || []).join(", "));
+    }).finally(() => setLoading(false));
   }, []);
 
   const save = async (e) => {
     e.preventDefault();
     if (!stats.products_sold || !stats.active_partners || !stats.rating) {
-      return toast.error("Semua field wajib diisi");
+      return toast.error("Field social proof wajib diisi");
     }
+    const namesArr = namesText.split(",").map((s) => s.trim()).filter(Boolean);
     setSaving(true);
     try {
-      const res = await api.put("/admin/stats", stats);
+      const res = await api.put("/admin/stats", {
+        ...stats,
+        online_base: parseInt(stats.online_base, 10) || 50,
+        live_feed_names: namesArr,
+      });
       setStats(res.data);
-      toast.success("Statistik berhasil diperbarui");
+      toast.success("Pengaturan berhasil disimpan");
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Gagal menyimpan");
     } finally {
@@ -578,11 +612,11 @@ function SettingsTab({ api }) {
       </p>
       <div className="mt-4 p-3 rounded-lg bg-[#F5A623]/5 border border-[#F5A623]/20 text-xs text-white/65">
         <b className="text-[#F5A623]">💡 Format bebas:</b> kamu boleh isi pakai apa aja —
-        misal <code className="text-white">"243+"</code>,{" "}
-        <code className="text-white">"1.2K+"</code>,{" "}
-        <code className="text-white">"10rb+"</code>,{" "}
-        <code className="text-white">"5.0/5"</code>, atau{" "}
-        <code className="text-white">"Rp 1.5jt"</code>. Animasi count-up akan otomatis menyesuaikan.
+        misal <code className="text-white">&quot;243+&quot;</code>,{" "}
+        <code className="text-white">&quot;1.2K+&quot;</code>,{" "}
+        <code className="text-white">&quot;10rb+&quot;</code>,{" "}
+        <code className="text-white">&quot;5.0/5&quot;</code>, atau{" "}
+        <code className="text-white">&quot;Rp 1.5jt&quot;</code>. Animasi count-up akan otomatis menyesuaikan.
       </div>
       <form onSubmit={save} className="space-y-4 mt-6">
         <Field label="Produk Terjual">
@@ -621,6 +655,42 @@ function SettingsTab({ api }) {
           {saving ? <Loader2 className="animate-spin" size={15} /> : "Simpan"}
         </Button>
       </form>
+
+      <div className="border-t border-white/5 mt-8 pt-6 space-y-4">
+        <h3 className="font-display text-lg">Online Counter</h3>
+        <Field label="Base Number (sistem fluktuasi ±5 di sekitar angka ini)">
+          <Input
+            data-testid="settings-online-base-input"
+            type="number"
+            min="1"
+            value={stats.online_base}
+            onChange={(e) => setStats({ ...stats, online_base: e.target.value })}
+            placeholder="50"
+            className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
+          />
+        </Field>
+
+        <h3 className="font-display text-lg pt-2">Live Activity Feed</h3>
+        <div className="flex items-center justify-between px-3 py-2 rounded-md bg-[#0f1117] border border-white/10">
+          <Label className="text-sm">Aktifkan pop-up notifikasi live</Label>
+          <Switch
+            data-testid="settings-livefeed-toggle"
+            checked={stats.live_feed_enabled}
+            onCheckedChange={(v) => setStats({ ...stats, live_feed_enabled: v })}
+            className="data-[state=checked]:bg-[#F5A623]"
+          />
+        </div>
+        <Field label="Daftar nama (pisahkan dengan koma)">
+          <Textarea
+            data-testid="settings-livefeed-names"
+            rows={4}
+            value={namesText}
+            onChange={(e) => setNamesText(e.target.value)}
+            placeholder="Andi, Budi, Cinta, Dewi, ..."
+            className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
+          />
+        </Field>
+      </div>
     </div>
   );
 }

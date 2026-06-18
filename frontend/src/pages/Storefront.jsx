@@ -5,6 +5,8 @@ import ProductCard from "@/components/ProductCard";
 import OrderModal from "@/components/OrderModal";
 import TestimonialCarousel from "@/components/TestimonialCarousel";
 import UrgencySection from "@/components/UrgencySection";
+import OnlineCounter from "@/components/OnlineCounter";
+import LiveFeed from "@/components/LiveFeed";
 import { Sparkles, ShieldCheck, Zap } from "lucide-react";
 
 const HERO_BG =
@@ -36,6 +38,9 @@ export default function Storefront() {
         <div className="absolute inset-0 bg-gradient-to-b from-[#0f1117]/40 via-[#0f1117]/70 to-[#0f1117]" />
         <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-24 md:py-36">
           <div className="max-w-3xl fade-up">
+            <div className="mb-6">
+              <OnlineCounter />
+            </div>
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-[#F5A623]/30 bg-[#F5A623]/10 text-[#F5A623] text-[11px] uppercase tracking-[0.25em] mb-6">
               <Sparkles size={12} /> Access • Premium • Trusted
             </div>
@@ -110,6 +115,7 @@ export default function Storefront() {
 
       <TestimonialCarousel />
       <UrgencySection />
+      <LiveFeed />
     </div>
   );
 }
