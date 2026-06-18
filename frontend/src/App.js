@@ -5,6 +5,7 @@ import Storefront from "@/pages/Storefront";
 import Partnership from "@/pages/Partnership";
 import AffiliateDashboard from "@/pages/AffiliateDashboard";
 import AdminPanel from "@/pages/AdminPanel";
+import LoyaltyPage from "@/pages/LoyaltyPage";
 import NavBar from "@/components/NavBar";
 import Footer from "@/components/Footer";
 import ChatWidget from "@/components/ChatWidget";
@@ -19,6 +20,7 @@ export default function App() {
           <Route path="/partnership" element={<Partnership />} />
           <Route path="/affiliate" element={<AffiliateDashboard />} />
           <Route path="/admin" element={<AdminPanel />} />
+          <Route path="/loyalty" element={<LoyaltyPage />} />
         </Routes>
         <Footer />
         <ChatWidget />

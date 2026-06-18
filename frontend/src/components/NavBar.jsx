@@ -8,6 +8,7 @@ const LOGO_URL =
 const links = [
   { to: "/", label: "Storefront" },
   { to: "/partnership", label: "Partnership" },
+  { to: "/loyalty", label: "Poin Harian" },
   { to: "/affiliate", label: "Affiliate" },
   { to: "/admin", label: "Admin" },
 ];

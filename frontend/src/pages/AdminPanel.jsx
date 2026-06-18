@@ -119,6 +119,7 @@ export default function AdminPanel() {
           <TabsTrigger value="orders" data-testid="tab-orders">Order</TabsTrigger>
           <TabsTrigger value="affiliates" data-testid="tab-affiliates">Affiliate</TabsTrigger>
           <TabsTrigger value="withdrawals" data-testid="tab-withdrawals">WD</TabsTrigger>
+          <TabsTrigger value="loyalty" data-testid="tab-loyalty">Loyalty</TabsTrigger>
           <TabsTrigger value="settings" data-testid="tab-settings">Settings</TabsTrigger>
         </TabsList>
 
@@ -133,6 +134,9 @@ export default function AdminPanel() {
         </TabsContent>
         <TabsContent value="withdrawals" className="mt-6">
           <WithdrawalsTab api={api} />
+        </TabsContent>
+        <TabsContent value="loyalty" className="mt-6">
+          <LoyaltyTab api={api} />
         </TabsContent>
         <TabsContent value="settings" className="mt-6">
           <SettingsTab api={api} />
@@ -555,6 +559,81 @@ function WithdrawalsTab({ api }) {
           )}
         </TableBody>
       </Table>
+    </div>
+  );
+}
+
+// ---------- Loyalty ----------
+function LoyaltyTab({ api }) {
+  const [members, setMembers] = useState([]);
+  const [codes, setCodes] = useState([]);
+
+  useEffect(() => {
+    api.get("/admin/loyalty/members").then((r) => setMembers(r.data));
+    api.get("/admin/loyalty/codes").then((r) => setCodes(r.data));
+  }, []);
+
+  return (
+    <div className="space-y-6">
+      <div className="glass rounded-2xl p-6">
+        <h3 className="font-display text-lg mb-4">Member Poin ({members.length})</h3>
+        <Table>
+          <TableHeader>
+            <TableRow className="border-white/10 hover:bg-transparent">
+              <TableHead className="text-white/60">Nama</TableHead>
+              <TableHead className="text-white/60">WhatsApp</TableHead>
+              <TableHead className="text-white/60">Streak</TableHead>
+              <TableHead className="text-white/60">Daftar</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {members.map((m) => (
+              <TableRow key={m.id} className="border-white/5" data-testid={`loyalty-member-${m.id}`}>
+                <TableCell className="text-sm">{m.name}</TableCell>
+                <TableCell className="font-mono text-xs">+{m.whatsapp}</TableCell>
+                <TableCell className="text-sm gold-text font-semibold">🔥 {m.streak}</TableCell>
+                <TableCell className="text-xs text-white/50">{m.created_at?.slice(0, 10)}</TableCell>
+              </TableRow>
+            ))}
+            {members.length === 0 && (
+              <TableRow><TableCell colSpan={4} className="text-center text-white/40 py-6">Belum ada member</TableCell></TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </div>
+
+      <div className="glass rounded-2xl p-6">
+        <h3 className="font-display text-lg mb-4">Kode Diskon ({codes.length})</h3>
+        <Table>
+          <TableHeader>
+            <TableRow className="border-white/10 hover:bg-transparent">
+              <TableHead className="text-white/60">Kode</TableHead>
+              <TableHead className="text-white/60">Member</TableHead>
+              <TableHead className="text-white/60">Diskon</TableHead>
+              <TableHead className="text-white/60">Status</TableHead>
+              <TableHead className="text-white/60">Dibuat</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {codes.map((c) => (
+              <TableRow key={c.id} className="border-white/5" data-testid={`loyalty-code-${c.code}`}>
+                <TableCell className="font-mono text-sm gold-text">{c.code}</TableCell>
+                <TableCell className="text-sm">{c.member_name}<div className="text-xs text-white/40 font-mono">+{c.member_whatsapp}</div></TableCell>
+                <TableCell className="text-sm">{c.percentage}%</TableCell>
+                <TableCell>
+                  <span className={`px-2 py-0.5 rounded-full text-[11px] border ${
+                    c.used ? "bg-white/5 text-white/50 border-white/10" : "bg-green-500/15 text-green-300 border-green-500/30"
+                  }`}>{c.used ? "Sudah dipakai" : "Aktif"}</span>
+                </TableCell>
+                <TableCell className="text-xs text-white/50">{c.created_at?.slice(0, 10)}</TableCell>
+              </TableRow>
+            ))}
+            {codes.length === 0 && (
+              <TableRow><TableCell colSpan={5} className="text-center text-white/40 py-6">Belum ada kode</TableCell></TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </div>
     </div>
   );
 }

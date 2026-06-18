@@ -23,14 +23,36 @@ export default function OrderModal({ open, onClose, product, referral }) {
     buyer_name: "",
     contact: "",
     payment_method: "qris",
+    discount_code: "",
   });
   const [loading, setLoading] = useState(false);
   const [orderCode, setOrderCode] = useState(null);
+  const [discountInfo, setDiscountInfo] = useState(null); // {valid, percentage}
 
   if (!product) return null;
   const hasDiscount =
     product.discount_active && product.discount_price < product.original_price;
-  const finalPrice = hasDiscount ? product.discount_price : product.original_price;
+  const basePrice = hasDiscount ? product.discount_price : product.original_price;
+  const finalPrice = discountInfo?.valid
+    ? Math.round(basePrice * (1 - discountInfo.percentage / 100))
+    : basePrice;
+
+  const validateCode = async () => {
+    const c = form.discount_code.trim().toUpperCase();
+    if (!c) { setDiscountInfo(null); return; }
+    try {
+      const res = await api.get(`/discount/validate/${c}`);
+      if (res.data.valid) {
+        setDiscountInfo(res.data);
+        toast.success(`Kode valid! Diskon ${res.data.percentage}%`);
+      } else {
+        setDiscountInfo({ valid: false });
+        toast.error("Kode tidak valid atau sudah dipakai");
+      }
+    } catch {
+      setDiscountInfo({ valid: false });
+    }
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -41,9 +63,12 @@ export default function OrderModal({ open, onClose, product, referral }) {
     setLoading(true);
     try {
       const res = await api.post("/orders", {
-        ...form,
+        buyer_name: form.buyer_name,
+        contact: form.contact,
+        payment_method: form.payment_method,
         product_id: product.id,
         referral_affiliate_code: referral || null,
+        discount_code: discountInfo?.valid ? form.discount_code.trim().toUpperCase() : null,
       });
       setOrderCode(res.data.order_code);
     } catch (e) {
@@ -56,7 +81,8 @@ export default function OrderModal({ open, onClose, product, referral }) {
   const handleClose = (v) => {
     if (!v) {
       setOrderCode(null);
-      setForm({ buyer_name: "", contact: "", payment_method: "qris" });
+      setDiscountInfo(null);
+      setForm({ buyer_name: "", contact: "", payment_method: "qris", discount_code: "" });
       onClose();
     }
   };
@@ -143,11 +169,38 @@ export default function OrderModal({ open, onClose, product, referral }) {
                 </div>
               )}
 
+              <div>
+                <Label className="text-xs uppercase tracking-widest text-white/60">Kode Diskon (opsional)</Label>
+                <div className="flex gap-2 mt-1">
+                  <Input
+                    data-testid="discount-code-input"
+                    value={form.discount_code}
+                    onChange={(e) => { setForm({ ...form, discount_code: e.target.value }); setDiscountInfo(null); }}
+                    placeholder="DISC-XXXXXX"
+                    className="bg-[#0f1117] border-white/15 text-white placeholder:text-white/30 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623] uppercase font-mono"
+                  />
+                  <Button type="button" data-testid="apply-discount-btn" onClick={validateCode}
+                    className="bg-white/10 hover:bg-white/15 text-white border border-white/15">
+                    Pakai
+                  </Button>
+                </div>
+                {discountInfo?.valid && (
+                  <p className="text-xs text-green-400 mt-1" data-testid="discount-applied">
+                    ✓ Diskon {discountInfo.percentage}% diterapkan
+                  </p>
+                )}
+              </div>
+
               <div className="flex items-center justify-between pt-2 border-t border-white/5">
                 <span className="text-white/55 text-sm">Total Bayar</span>
-                <span className="font-display text-xl gold-text font-semibold">
-                  {formatIDR(finalPrice)}
-                </span>
+                <div className="text-right">
+                  {discountInfo?.valid && (
+                    <div className="text-xs text-white/40 line-through">{formatIDR(basePrice)}</div>
+                  )}
+                  <span className="font-display text-xl gold-text font-semibold">
+                    {formatIDR(finalPrice)}
+                  </span>
+                </div>
               </div>
 
               <DialogFooter>

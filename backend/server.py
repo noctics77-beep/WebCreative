@@ -119,6 +119,7 @@ class OrderCreate(BaseModel):
     product_id: str
     payment_method: str
     referral_affiliate_code: Optional[str] = None
+    discount_code: Optional[str] = None
 
 
 class Affiliate(BaseModel):
@@ -242,6 +243,14 @@ async def create_order(payload: OrderCreate):
         if product.get("discount_active") and product.get("discount_price")
         else product["original_price"]
     )
+
+    # Apply loyalty discount code (10% off)
+    if payload.discount_code:
+        code = payload.discount_code.strip().upper()
+        code_doc = await db.discount_codes.find_one({"code": code, "used": False}, {"_id": 0})
+        if code_doc:
+            price = round(price * (1 - code_doc["percentage"] / 100), 2)
+            await db.discount_codes.update_one({"code": code}, {"$set": {"used": True, "used_at": now_iso()}})
 
     referral = payload.referral_affiliate_code
     if referral:
@@ -459,6 +468,149 @@ async def admin_update_withdrawal(wd_id: str, payload: StatusUpdate, x_admin_pas
 @api_router.get("/")
 async def root():
     return {"message": "CreativeStore API"}
+
+
+# ---------- Loyalty / Daily Check-in ----------
+class LoyaltyRegister(BaseModel):
+    name: str
+    whatsapp: str
+
+
+class CheckinPayload(BaseModel):
+    whatsapp: str
+
+
+def _norm_wa(w: str) -> str:
+    return "".join(ch for ch in (w or "") if ch.isdigit())
+
+
+def _calc_streak(checkin_dates: List[str]) -> int:
+    """checkin_dates: list of YYYY-MM-DD strings. Returns current streak ending today/yesterday."""
+    if not checkin_dates:
+        return 0
+    today = datetime.now(timezone.utc).date()
+    days = sorted({datetime.fromisoformat(d).date() for d in checkin_dates}, reverse=True)
+    # Streak only valid if last checkin is today or yesterday
+    if (today - days[0]).days > 1:
+        return 0
+    streak = 1
+    for i in range(1, len(days)):
+        if (days[i - 1] - days[i]).days == 1:
+            streak += 1
+        else:
+            break
+    return streak
+
+
+def _gen_disc_code() -> str:
+    return "DISC-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=6))
+
+
+@api_router.post("/loyalty/register")
+async def loyalty_register(payload: LoyaltyRegister):
+    wa = _norm_wa(payload.whatsapp)
+    if not wa or not payload.name.strip():
+        raise HTTPException(400, "Nama dan WhatsApp wajib diisi")
+    existing = await db.loyalty_members.find_one({"whatsapp": wa}, {"_id": 0})
+    if existing:
+        return existing
+    member = {
+        "id": str(uuid.uuid4()),
+        "name": payload.name.strip(),
+        "whatsapp": wa,
+        "created_at": now_iso(),
+    }
+    await db.loyalty_members.insert_one(member)
+    return member
+
+
+@api_router.post("/loyalty/checkin")
+async def loyalty_checkin(payload: CheckinPayload):
+    wa = _norm_wa(payload.whatsapp)
+    member = await db.loyalty_members.find_one({"whatsapp": wa}, {"_id": 0})
+    if not member:
+        raise HTTPException(404, "Member tidak ditemukan, daftar dulu ya")
+
+    today_str = datetime.now(timezone.utc).date().isoformat()
+    already = await db.checkins.find_one({"member_id": member["id"], "checkin_date": today_str})
+    if already:
+        raise HTTPException(400, "Kamu sudah check-in hari ini")
+
+    await db.checkins.insert_one({
+        "id": str(uuid.uuid4()),
+        "member_id": member["id"],
+        "checkin_date": today_str,
+        "created_at": now_iso(),
+    })
+
+    # Compute streak
+    rows = await db.checkins.find({"member_id": member["id"]}, {"_id": 0, "checkin_date": 1}).to_list(1000)
+    dates = [r["checkin_date"] for r in rows]
+    streak = _calc_streak(dates)
+
+    new_code = None
+    if streak > 0 and streak % 7 == 0:
+        code = _gen_disc_code()
+        while await db.discount_codes.find_one({"code": code}):
+            code = _gen_disc_code()
+        doc = {
+            "id": str(uuid.uuid4()),
+            "member_id": member["id"],
+            "member_name": member["name"],
+            "member_whatsapp": member["whatsapp"],
+            "code": code,
+            "percentage": 10,
+            "used": False,
+            "created_at": now_iso(),
+        }
+        await db.discount_codes.insert_one(doc)
+        new_code = code
+
+    return {"streak": streak, "new_code": new_code, "checkin_date": today_str}
+
+
+@api_router.get("/loyalty/member/{whatsapp}")
+async def loyalty_member(whatsapp: str):
+    wa = _norm_wa(whatsapp)
+    member = await db.loyalty_members.find_one({"whatsapp": wa}, {"_id": 0})
+    if not member:
+        raise HTTPException(404, "Member belum terdaftar")
+    rows = await db.checkins.find({"member_id": member["id"]}, {"_id": 0}).sort("checkin_date", -1).to_list(500)
+    codes = await db.discount_codes.find({"member_id": member["id"]}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    dates = [r["checkin_date"] for r in rows]
+    streak = _calc_streak(dates)
+    today_str = datetime.now(timezone.utc).date().isoformat()
+    return {
+        "member": member,
+        "checkins": dates,
+        "streak": streak,
+        "checked_today": today_str in dates,
+        "codes": codes,
+    }
+
+
+@api_router.get("/discount/validate/{code}")
+async def discount_validate(code: str):
+    doc = await db.discount_codes.find_one({"code": code.upper(), "used": False}, {"_id": 0})
+    if not doc:
+        return {"valid": False}
+    return {"valid": True, "percentage": doc["percentage"]}
+
+
+@api_router.get("/admin/loyalty/members")
+async def admin_loyalty_members(x_admin_password: Optional[str] = Header(None)):
+    verify_admin(x_admin_password)
+    members = await db.loyalty_members.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    for m in members:
+        rows = await db.checkins.find({"member_id": m["id"]}, {"_id": 0, "checkin_date": 1}).to_list(500)
+        m["streak"] = _calc_streak([r["checkin_date"] for r in rows])
+    return members
+
+
+@api_router.get("/admin/loyalty/codes")
+async def admin_loyalty_codes(x_admin_password: Optional[str] = Header(None)):
+    verify_admin(x_admin_password)
+    return await db.discount_codes.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
 
 
 # ---------- Chat ----------
