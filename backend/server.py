@@ -25,6 +25,7 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 ADMIN_WHATSAPP = os.environ.get("ADMIN_WHATSAPP", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -485,7 +486,8 @@ class ChatMessage(BaseModel):
 
 @api_router.post("/chat")
 async def chat_endpoint(payload: ChatMessage):
-    if not GEMINI_API_KEY:
+    api_key = EMERGENT_LLM_KEY or GEMINI_API_KEY
+    if not api_key:
         raise HTTPException(503, "AI chat belum dikonfigurasi. Hubungi admin.")
     try:
         from emergentintegrations.llm.chat import LlmChat, UserMessage
@@ -494,16 +496,16 @@ async def chat_endpoint(payload: ChatMessage):
 
     session_id = payload.session_id or str(uuid.uuid4())
     chat = LlmChat(
-        api_key=GEMINI_API_KEY,
+        api_key=api_key,
         session_id=session_id,
         system_message=CHAT_SYSTEM_PROMPT,
-    ).with_model("gemini", "gemini-2.5-flash")
+    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
 
     try:
         reply = await chat.send_message(UserMessage(text=payload.message))
         return {"reply": str(reply), "session_id": session_id}
     except Exception as e:
-        logger.error(f"Gemini error: {e}")
+        logger.error(f"LLM error: {e}")
         raise HTTPException(500, "Maaf, AI sedang sibuk. Coba lagi sebentar 🙏")
 
 
