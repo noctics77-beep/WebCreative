@@ -12,6 +12,7 @@ import Partnership from "@/pages/Partnership";
 import AffiliateDashboard from "@/pages/AffiliateDashboard";
 import AdminPanel from "@/pages/AdminPanel";
 import LoyaltyPage from "@/pages/LoyaltyPage";
+import TrackOrder from "@/pages/TrackOrder";
 import NavBar from "@/components/NavBar";
 import Footer from "@/components/Footer";
 import ChatWidget from "@/components/ChatWidget";
@@ -41,6 +42,7 @@ export default function App() {
           <Route path="/affiliate" element={<AffiliateDashboard />} />
           <Route path="/admin" element={<AdminPanel />} />
           <Route path="/loyalty" element={<LoyaltyPage />} />
+          <Route path="/lacak-pesanan" element={<TrackOrder />} />
         </Routes>
         <Footer />
         <ChatWidget />

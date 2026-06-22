@@ -1,0 +1,52 @@
+{
+  "summary": "Validated 5 new features (Export Laporan, Daily Telegram, Track Order, Pelanggan tab, Affiliate Export). Backend: 26/26 pytest in new suite + 28/28 prior suites = 54/54 PASS. Frontend: /lacak-pesanan page, NavBar+Footer links, Admin Export Panel (real download triggered with correct filename), Pelanggan tab, Affiliate per-row + bulk export dialog all verified. Scheduler 'daily_telegram_summary' confirmed registered in startup log. 1 UI bug found: double 'Rp Rp' prefix on Admin Dashboard stat cards.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "AdminPanel Dashboard stat cards (HARI INI / 7 HARI / 30 HARI / KOMISI EARNED / KOMISI TERBAYAR)",
+        "issue": "Currency displays as 'Rp Rp 15.000' / 'Rp Rp 91.068' — duplicate 'Rp' prefix because formatter prepends 'Rp ' to a value that already starts with 'Rp'. Affects all 5 omzet/komisi cards on Dashboard.",
+        "selector": ".admin Dashboard stat cards in /admin",
+        "priority": "MEDIUM"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin Dashboard", "issues": ["Numeric formatting: comma vs dot inconsistency (91.068 vs 91,068) — using IDN locale dots looks like decimals to international users; double Rp prefix"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_new_features.py",
+    "/app/test_reports/pytest/iter3_results.xml",
+    "/app/backend/tests/test_creativestore.py",
+    "/app/backend/tests/test_chat_dashboard.py"
+  ],
+  "action_items": [
+    "Fix double 'Rp Rp' prefix in AdminPanel Dashboard stat cards — likely in formatRupiah call where value already includes 'Rp' (probably the dashboard renders `Rp ${formatRupiah(value)}` while formatRupiah already returns 'Rp 15.000')."
+  ],
+  "critical_code_review_comments": [
+    "exports.py XLSX generators properly use bold gold-on-navy header (matches brand palette) + auto column width with min 10/max 50; CSV uses utf-8-sig (BOM) for Excel-Indonesia compatibility — good.",
+    "_safe_sheet correctly strips forbidden chars [/]:*?\\\\ and dedupes with ' (n)' suffix capped to 28 chars — verified by test_bulk_xlsx_unique_sheets.",
+    "scheduler.py uses APScheduler AsyncIOScheduler with Asia/Jakarta cron(8,0); job id 'daily_telegram_summary' confirmed in supervisor log: 'Daily Telegram summary scheduler started (08:00 WIB)'. build_daily_summary correctly converts WIB midnight->UTC ISO for matching.",
+    "/track-order is properly PUBLIC (no Header check). _public_order_view correctly strips sensitive fields (contact, pakasir_qr_string, commission_amount, payment_method internals). Good.",
+    "/track-order contact normalization tries [raw, digits, digits.lstrip('0'), '62' + digits.lstrip('0'), digits.lstrip('62')] — covers most IDN WA formats but `digits.lstrip('62')` is fragile (will strip '62' from e.g. '6212345' even when user meant '6212345'). Acceptable trade-off but document.",
+    "/admin/customers aggregation pipeline correctly sums only confirmed orders for total_spent via $cond — matches requirement.",
+    "/admin/export/customers reuses admin_customers(q=None,...) function call — DRY but couples HTTP-decorated handler internals; consider extracting `_compute_customers()` helper for cleaner separation.",
+    "_parse_period for custom range correctly returns 400 on invalid YYYY-MM-DD — verified.",
+    "Minor: server.py is now ~1360 lines (was 1055). Split into routers/exports.py + routers/tracking.py + routers/customers.py is overdue.",
+    "Frontend Admin Dashboard double 'Rp' bug suggests the currency helper isn't centralized — extract a single formatRupiah(amount) util and use everywhere."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_new_features.py"
+  ],
+  "success_rate": {"backend": "100% (26/26 new + 28/28 prior = 54/54)", "frontend": "95% — all new features render & integrate correctly; 1 cosmetic bug (Rp Rp duplication)"},
+  "test_credentials": "Admin password: Blokirsandi12 (env). Track-order is public, no auth.",
+  "seed_data_creation": "test_new_features.py creates a TEST_Tracker order via /api/orders (contact 08123456789) — used across track-order + customers tests. Cleanup not automated but TEST_ prefix used.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend regression suite: pytest /app/backend/tests/ -v (54 tests, all pass). New suite at /app/backend/tests/test_new_features.py covers exports/customers/track-order/daily-summary. data-testids verified: track-order-page, track-tab-order, track-tab-wa, track-order-input, track-wa-input, track-submit-btn, track-results, track-result-{code}, track-error, footer-track-link, nav-lacak pesanan (lowercase, space), export-report-panel, export-orders-btn, export-period-select, export-format-select, export-start-date, export-end-date, tab-customers, customers-search, customers-export-format, customers-export-btn, customer-row-{wa}, view-customer-{wa}, customer-detail-dialog, export-all-affiliates-btn, export-affiliate-{code}, affiliate-export-dialog, aff-export-period, aff-export-format, aff-export-submit. Real file download verified: orders_week_20260622_0601.xlsx triggered correctly through axios blob helper.",
+  "rca of the issue": "Cosmetic 'Rp Rp' bug RCA: In /app/frontend/src/pages/AdminPanel.jsx Dashboard JSX, the stat-card amount is rendered as something like `Rp {formatRupiah(today.revenue)}` while formatRupiah() already returns a string prefixed with 'Rp ' (e.g. 'Rp 15.000'), producing 'Rp Rp 15.000'. Fix: either drop the literal 'Rp ' in JSX OR change formatRupiah to return raw number formatting. Repro: visit /admin -> login -> Dashboard tab -> observe the 5 stat cards."
+}

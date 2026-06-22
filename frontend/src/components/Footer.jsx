@@ -10,9 +10,18 @@ export default function Footer() {
           <span className="gold-text font-semibold">CreativeStore</span> — Digital
           goods marketplace.
         </p>
-        <p className="text-xs uppercase tracking-[0.25em] text-white/30">
-          Access • Premium • Trusted
-        </p>
+        <div className="flex items-center gap-5">
+          <a
+            href="/lacak-pesanan"
+            data-testid="footer-track-link"
+            className="text-xs text-white/60 hover:text-[#F5A623] transition-colors"
+          >
+            Lacak Pesanan
+          </a>
+          <p className="text-xs uppercase tracking-[0.25em] text-white/30">
+            Access • Premium • Trusted
+          </p>
+        </div>
       </div>
     </footer>
   );

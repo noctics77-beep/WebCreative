@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Header
+from fastapi import FastAPI, APIRouter, HTTPException, Header, Query, Response
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -15,6 +15,8 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from fastapi import Request
 import pakasir
+import exports
+from scheduler import init_scheduler, build_daily_summary
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -1036,6 +1038,292 @@ async def chat_endpoint(payload: ChatMessage):
         }
 
 
+# ---------- Helpers for export period parsing ----------
+def _parse_period(period: str, start: Optional[str], end: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """Return (start_iso, end_iso) in UTC for the given period.
+
+    period: today | week | month | custom | all
+    For custom, start/end are YYYY-MM-DD strings (inclusive).
+    """
+    now = datetime.now(timezone.utc)
+    today_start = _start_of_day_utc(now)
+    if period == "today":
+        return today_start.isoformat(), (today_start + timedelta(days=1)).isoformat()
+    if period == "week":
+        return (today_start - timedelta(days=6)).isoformat(), (today_start + timedelta(days=1)).isoformat()
+    if period == "month":
+        return (today_start - timedelta(days=29)).isoformat(), (today_start + timedelta(days=1)).isoformat()
+    if period == "custom":
+        try:
+            s = datetime.fromisoformat(start).replace(tzinfo=timezone.utc) if start else None
+            e = datetime.fromisoformat(end).replace(tzinfo=timezone.utc) if end else None
+            if e:
+                e = e + timedelta(days=1)  # inclusive end
+            return (s.isoformat() if s else None, e.isoformat() if e else None)
+        except Exception:
+            raise HTTPException(400, "Format tanggal tidak valid. Gunakan YYYY-MM-DD.")
+    # "all" or unknown -> no filter
+    return None, None
+
+
+def _orders_filter(start_iso: Optional[str], end_iso: Optional[str]) -> dict:
+    f: dict = {}
+    if start_iso or end_iso:
+        rng = {}
+        if start_iso:
+            rng["$gte"] = start_iso
+        if end_iso:
+            rng["$lt"] = end_iso
+        f["created_at"] = rng
+    return f
+
+
+def _filename(prefix: str, fmt: str) -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M")
+    ext = "xlsx" if fmt == "xlsx" else "csv"
+    return f"{prefix}_{stamp}.{ext}"
+
+
+# ---------- Admin: Export Orders ----------
+@api_router.get("/admin/export/orders")
+async def admin_export_orders(
+    period: str = Query("week"),
+    start: Optional[str] = Query(None),
+    end: Optional[str] = Query(None),
+    fmt: str = Query("xlsx"),
+    x_admin_password: Optional[str] = Header(None),
+):
+    await verify_admin(x_admin_password)
+    start_iso, end_iso = _parse_period(period, start, end)
+    cursor = db.orders.find(_orders_filter(start_iso, end_iso), {"_id": 0}).sort("created_at", -1)
+    orders = await cursor.to_list(10000)
+    if fmt == "csv":
+        data = exports.orders_to_csv(orders)
+    else:
+        data = exports.orders_to_xlsx(orders, sheet_name="Orders")
+    fname = _filename(f"orders_{period}", fmt)
+    return Response(
+        content=data,
+        media_type=exports.media_type(fmt),
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+# ---------- Admin: Customers (grouped by WhatsApp) ----------
+@api_router.get("/admin/customers")
+async def admin_customers(
+    q: Optional[str] = Query(None),
+    x_admin_password: Optional[str] = Header(None),
+):
+    await verify_admin(x_admin_password)
+    pipeline = [
+        {"$match": {"contact": {"$ne": None}}},
+        {
+            "$group": {
+                "_id": "$contact",
+                "name": {"$last": "$buyer_name"},
+                "total_orders": {"$sum": 1},
+                "total_spent": {
+                    "$sum": {
+                        "$cond": [
+                            {"$eq": ["$status", "confirmed"]},
+                            {"$ifNull": ["$pakasir_total", "$product_price"]},
+                            0,
+                        ]
+                    }
+                },
+                "last_order_at": {"$max": "$created_at"},
+            }
+        },
+        {"$sort": {"last_order_at": -1}},
+    ]
+    rows = await db.orders.aggregate(pipeline).to_list(5000)
+    customers = [
+        {
+            "whatsapp": r["_id"] or "-",
+            "name": r.get("name") or "-",
+            "total_orders": int(r.get("total_orders") or 0),
+            "total_spent": float(r.get("total_spent") or 0),
+            "last_order_at": r.get("last_order_at"),
+        }
+        for r in rows
+        if r.get("_id")
+    ]
+    if q:
+        ql = q.lower().strip()
+        customers = [
+            c for c in customers
+            if ql in (c["name"] or "").lower() or ql in (c["whatsapp"] or "").lower()
+        ]
+    return customers
+
+
+@api_router.get("/admin/customers/{whatsapp}/orders")
+async def admin_customer_orders(whatsapp: str, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    orders = (
+        await db.orders.find({"contact": whatsapp}, {"_id": 0})
+        .sort("created_at", -1)
+        .to_list(500)
+    )
+    return orders
+
+
+@api_router.get("/admin/export/customers")
+async def admin_export_customers(
+    fmt: str = Query("xlsx"),
+    x_admin_password: Optional[str] = Header(None),
+):
+    await verify_admin(x_admin_password)
+    customers = await admin_customers(q=None, x_admin_password=x_admin_password)
+    if fmt == "csv":
+        data = exports.customers_to_csv(customers)
+    else:
+        data = exports.customers_to_xlsx(customers)
+    fname = _filename("customers", fmt)
+    return Response(
+        content=data,
+        media_type=exports.media_type(fmt),
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+# ---------- Admin: Affiliate Export ----------
+async def _affiliate_summary_with_orders(
+    code: str, start_iso: Optional[str], end_iso: Optional[str]
+):
+    aff = await db.affiliates.find_one({"affiliate_code": code}, {"_id": 0})
+    if not aff:
+        raise HTTPException(404, "Affiliate tidak ditemukan")
+    # Total sales (confirmed)
+    sales_count = await db.orders.count_documents(
+        {"referral_affiliate_code": code, "status": "confirmed"}
+    )
+    summary = {
+        "name": aff.get("name"),
+        "affiliate_code": aff.get("affiliate_code"),
+        "balance": aff.get("balance", 0),
+        "total_earned": aff.get("total_earned", 0),
+        "total_withdrawn": aff.get("total_withdrawn", 0),
+        "total_sales": sales_count,
+    }
+    f = {"referral_affiliate_code": code}
+    rng = _orders_filter(start_iso, end_iso)
+    if "created_at" in rng:
+        f["created_at"] = rng["created_at"]
+    orders = await db.orders.find(f, {"_id": 0}).sort("created_at", -1).to_list(5000)
+    return summary, orders
+
+
+@api_router.get("/admin/export/affiliates/{code}")
+async def admin_export_affiliate(
+    code: str,
+    period: str = Query("all"),
+    start: Optional[str] = Query(None),
+    end: Optional[str] = Query(None),
+    fmt: str = Query("xlsx"),
+    x_admin_password: Optional[str] = Header(None),
+):
+    await verify_admin(x_admin_password)
+    start_iso, end_iso = _parse_period(period, start, end)
+    summary, orders = await _affiliate_summary_with_orders(code, start_iso, end_iso)
+    if fmt == "csv":
+        data = exports.affiliate_to_csv(summary, orders)
+    else:
+        data = exports.affiliate_to_xlsx(summary, orders)
+    fname = _filename(f"affiliate_{code}_{period}", fmt)
+    return Response(
+        content=data,
+        media_type=exports.media_type(fmt),
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@api_router.get("/admin/export/affiliates")
+async def admin_export_all_affiliates(
+    period: str = Query("all"),
+    start: Optional[str] = Query(None),
+    end: Optional[str] = Query(None),
+    fmt: str = Query("xlsx"),
+    x_admin_password: Optional[str] = Header(None),
+):
+    await verify_admin(x_admin_password)
+    start_iso, end_iso = _parse_period(period, start, end)
+    affs = await db.affiliates.find({}, {"_id": 0}).sort("created_at", -1).to_list(2000)
+    items: list = []
+    for a in affs:
+        summary, orders = await _affiliate_summary_with_orders(
+            a["affiliate_code"], start_iso, end_iso
+        )
+        items.append({"summary": summary, "orders": orders})
+    if fmt == "csv":
+        data = exports.all_affiliates_to_csv(items)
+    else:
+        data = exports.all_affiliates_to_xlsx(items)
+    fname = _filename(f"all_affiliates_{period}", fmt)
+    return Response(
+        content=data,
+        media_type=exports.media_type(fmt),
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+# ---------- Admin: Trigger daily summary (manual test) ----------
+@api_router.post("/admin/telegram/daily-summary/test")
+async def admin_trigger_daily_summary(x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    text = await build_daily_summary(db)
+    await send_telegram(text)
+    return {"ok": True, "preview": text}
+
+
+# ---------- Public: Order tracking (by order code OR WA) ----------
+@api_router.get("/track-order")
+async def track_order(
+    order_code: Optional[str] = Query(None),
+    contact: Optional[str] = Query(None),
+):
+    if not order_code and not contact:
+        raise HTTPException(400, "Masukkan Order ID atau Nomor WhatsApp")
+
+    if order_code:
+        oc = order_code.strip().upper()
+        order = await db.orders.find_one({"order_code": oc}, {"_id": 0})
+        if not order:
+            raise HTTPException(404, "Order tidak ditemukan")
+        return {"orders": [_public_order_view(order)]}
+
+    # Lookup by contact (WA) — normalize digits
+    raw = (contact or "").strip()
+    digits = "".join(ch for ch in raw if ch.isdigit())
+    # Try both original and digits version; also strip leading 0
+    candidates = list({raw, digits, digits.lstrip("0"), "62" + digits.lstrip("0"), digits.lstrip("62")})
+    candidates = [c for c in candidates if c]
+    orders = (
+        await db.orders.find({"contact": {"$in": candidates}}, {"_id": 0})
+        .sort("created_at", -1)
+        .to_list(200)
+    )
+    if not orders:
+        raise HTTPException(404, "Tidak ada pesanan ditemukan untuk nomor ini")
+    return {"orders": [_public_order_view(o) for o in orders]}
+
+
+def _public_order_view(o: dict) -> dict:
+    """Strip sensitive fields for public response."""
+    return {
+        "order_code": o.get("order_code"),
+        "buyer_name": o.get("buyer_name"),
+        "product_name": o.get("product_name"),
+        "product_price": o.get("pakasir_total") or o.get("product_price"),
+        "status": o.get("status"),
+        "payment_method": o.get("payment_method"),
+        "created_at": o.get("created_at"),
+        "paid_at": o.get("paid_at"),
+        "expires_at": o.get("expires_at"),
+    }
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -1049,6 +1337,27 @@ app.add_middleware(
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 
+# ---------- Scheduler (daily Telegram summary at 08:00 WIB) ----------
+_scheduler = None
+
+
+@app.on_event("startup")
+async def _start_scheduler():
+    global _scheduler
+    try:
+        _scheduler = init_scheduler(db, send_telegram)
+        _scheduler.start()
+        logger.info("Daily Telegram summary scheduler started (08:00 WIB)")
+    except Exception as e:
+        logger.error(f"Scheduler init failed: {e}")
+
+
 @app.on_event("shutdown")
 async def shutdown_db_client():
+    global _scheduler
+    try:
+        if _scheduler:
+            _scheduler.shutdown(wait=False)
+    except Exception:
+        pass
     client.close()

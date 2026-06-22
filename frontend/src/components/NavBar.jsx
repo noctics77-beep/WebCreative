@@ -10,6 +10,7 @@ const links = [
   { to: "/partnership", label: "Partnership" },
   { to: "/loyalty", label: "Poin Harian" },
   { to: "/affiliate", label: "Affiliate" },
+  { to: "/lacak-pesanan", label: "Lacak Pesanan" },
   { to: "/admin", label: "Admin" },
 ];
 

@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { adminApi, formatIDR } from "@/lib/api";
+import { useEffect, useState, useMemo } from "react";
+import { adminApi, formatIDR, downloadAdminFile } from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -34,7 +34,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Edit, LogOut, Plus, Trash2, Loader2, Check, X } from "lucide-react";
+import { Edit, LogOut, Plus, Trash2, Loader2, Check, X, Download, Search } from "lucide-react";
 
 export default function AdminPanel() {
   const [password, setPassword] = useState(localStorage.getItem("cs_admin_pw") || "");
@@ -123,6 +123,7 @@ export default function AdminPanel() {
           <TabsTrigger value="dashboard" data-testid="tab-dashboard">Dashboard</TabsTrigger>
           <TabsTrigger value="products" data-testid="tab-products">Produk</TabsTrigger>
           <TabsTrigger value="orders" data-testid="tab-orders">Order</TabsTrigger>
+          <TabsTrigger value="customers" data-testid="tab-customers">Pelanggan</TabsTrigger>
           <TabsTrigger value="affiliates" data-testid="tab-affiliates">Affiliate</TabsTrigger>
           <TabsTrigger value="withdrawals" data-testid="tab-withdrawals">WD</TabsTrigger>
           <TabsTrigger value="loyalty" data-testid="tab-loyalty">Loyalty</TabsTrigger>
@@ -131,7 +132,7 @@ export default function AdminPanel() {
         </TabsList>
 
         <TabsContent value="dashboard" className="mt-6">
-          <DashboardTab api={api} />
+          <DashboardTab api={api} password={password} />
         </TabsContent>
         <TabsContent value="products" className="mt-6">
           <ProductsTab api={api} />
@@ -139,8 +140,11 @@ export default function AdminPanel() {
         <TabsContent value="orders" className="mt-6">
           <OrdersTab api={api} />
         </TabsContent>
+        <TabsContent value="customers" className="mt-6">
+          <CustomersTab api={api} password={password} />
+        </TabsContent>
         <TabsContent value="affiliates" className="mt-6">
-          <AffiliatesTab api={api} />
+          <AffiliatesTab api={api} password={password} />
         </TabsContent>
         <TabsContent value="withdrawals" className="mt-6">
           <WithdrawalsTab api={api} />
@@ -469,13 +473,25 @@ function OrdersTab({ api }) {
 }
 
 // ---------- Affiliates ----------
-function AffiliatesTab({ api }) {
+function AffiliatesTab({ api, password }) {
   const [items, setItems] = useState([]);
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [individualOpen, setIndividualOpen] = useState(null); // affiliate object
   useEffect(() => { api.get("/admin/affiliates").then((r) => setItems(r.data)); }, []);
 
   return (
     <div className="glass rounded-2xl p-6">
-      <h3 className="font-display text-lg mb-4">Affiliate ({items.length})</h3>
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <h3 className="font-display text-lg">Affiliate ({items.length})</h3>
+        <Button
+          data-testid="export-all-affiliates-btn"
+          onClick={() => setBulkOpen(true)}
+          className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold"
+          size="sm"
+        >
+          <Download size={14} className="mr-2" /> Export Semua Affiliate
+        </Button>
+      </div>
       <Table>
         <TableHeader>
           <TableRow className="border-white/10 hover:bg-transparent">
@@ -484,6 +500,7 @@ function AffiliatesTab({ api }) {
             <TableHead className="text-white/60">Saldo</TableHead>
             <TableHead className="text-white/60">Total Earned</TableHead>
             <TableHead className="text-white/60">Total Sales</TableHead>
+            <TableHead className="text-white/60 text-right">Aksi</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -497,13 +514,40 @@ function AffiliatesTab({ api }) {
               <TableCell className="gold-text font-semibold">{formatIDR(a.balance)}</TableCell>
               <TableCell className="text-sm">{formatIDR(a.total_earned)}</TableCell>
               <TableCell className="text-sm">{a.total_sales}</TableCell>
+              <TableCell className="text-right">
+                <button
+                  data-testid={`export-affiliate-${a.affiliate_code}`}
+                  onClick={() => setIndividualOpen(a)}
+                  className="p-1.5 rounded-md bg-[#F5A623]/10 hover:bg-[#F5A623]/20 text-[#F5A623] inline-flex items-center gap-1 text-xs"
+                >
+                  <Download size={13} /> Export
+                </button>
+              </TableCell>
             </TableRow>
           ))}
           {items.length === 0 && (
-            <TableRow><TableCell colSpan={5} className="text-center text-white/40 py-6">Belum ada affiliate</TableCell></TableRow>
+            <TableRow><TableCell colSpan={6} className="text-center text-white/40 py-6">Belum ada affiliate</TableCell></TableRow>
           )}
         </TableBody>
       </Table>
+
+      {bulkOpen && (
+        <AffiliateExportDialog
+          mode="all"
+          password={password}
+          open={bulkOpen}
+          onOpenChange={setBulkOpen}
+        />
+      )}
+      {individualOpen && (
+        <AffiliateExportDialog
+          mode="single"
+          affiliate={individualOpen}
+          password={password}
+          open={!!individualOpen}
+          onOpenChange={(v) => !v && setIndividualOpen(null)}
+        />
+      )}
     </div>
   );
 }
@@ -948,7 +992,7 @@ const Badge = ({ status }) => {
 
 
 // ---------- Dashboard / Evaluasi ----------
-function DashboardTab({ api }) {
+function DashboardTab({ api, password }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -1015,6 +1059,8 @@ function DashboardTab({ api }) {
           Refresh
         </Button>
       </div>
+
+      <ExportReportPanel password={password} />
 
       {/* Stat Cards: Today / Week / Month */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -1205,5 +1251,428 @@ function TrendChart({ data }) {
         </ResponsiveContainer>
       </div>
     </div>
+  );
+}
+
+
+// ---------- Export Report Panel (Dashboard) ----------
+function ExportReportPanel({ password }) {
+  const [period, setPeriod] = useState("week");
+  const [fmt, setFmt] = useState("xlsx");
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const download = async () => {
+    if (period === "custom" && (!start || !end)) {
+      toast.error("Tanggal awal & akhir wajib diisi untuk Custom Range");
+      return;
+    }
+    setBusy(true);
+    try {
+      const params = { period, fmt };
+      if (period === "custom") {
+        params.start = start;
+        params.end = end;
+      }
+      await downloadAdminFile(password, "/admin/export/orders", params);
+      toast.success("Laporan diunduh");
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Gagal mengunduh laporan");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      data-testid="export-report-panel"
+      className="rounded-xl border border-white/10 bg-[#1a1d27] p-5"
+    >
+      <div className="flex items-center justify-between flex-wrap gap-3 mb-4">
+        <div>
+          <h3 className="text-sm font-semibold text-white/90">Export Laporan Order</h3>
+          <p className="text-xs text-white/50">
+            Download semua order (semua status) sesuai periode & format yang dipilih.
+          </p>
+        </div>
+        <Button
+          data-testid="export-orders-btn"
+          onClick={download}
+          disabled={busy}
+          className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold"
+          size="sm"
+        >
+          {busy ? <Loader2 className="animate-spin" size={14} /> : <><Download size={14} className="mr-2" /> Download</>}
+        </Button>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div>
+          <Label className="text-[11px] uppercase tracking-wide text-white/60">Periode</Label>
+          <Select value={period} onValueChange={setPeriod}>
+            <SelectTrigger data-testid="export-period-select" className="mt-1 bg-[#0f1117] border-white/15 text-white">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="bg-[#1a1d27] border-white/10 text-white">
+              <SelectItem value="today">Hari Ini</SelectItem>
+              <SelectItem value="week">Minggu Ini</SelectItem>
+              <SelectItem value="month">Bulan Ini</SelectItem>
+              <SelectItem value="custom">Custom Range</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <Label className="text-[11px] uppercase tracking-wide text-white/60">Format</Label>
+          <Select value={fmt} onValueChange={setFmt}>
+            <SelectTrigger data-testid="export-format-select" className="mt-1 bg-[#0f1117] border-white/15 text-white">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="bg-[#1a1d27] border-white/10 text-white">
+              <SelectItem value="xlsx">XLSX (Excel)</SelectItem>
+              <SelectItem value="csv">CSV</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        {period === "custom" && (
+          <>
+            <div>
+              <Label className="text-[11px] uppercase tracking-wide text-white/60">Tanggal Awal</Label>
+              <Input
+                data-testid="export-start-date"
+                type="date"
+                value={start}
+                onChange={(e) => setStart(e.target.value)}
+                className="mt-1 bg-[#0f1117] border-white/15 text-white"
+              />
+            </div>
+            <div>
+              <Label className="text-[11px] uppercase tracking-wide text-white/60">Tanggal Akhir</Label>
+              <Input
+                data-testid="export-end-date"
+                type="date"
+                value={end}
+                onChange={(e) => setEnd(e.target.value)}
+                className="mt-1 bg-[#0f1117] border-white/15 text-white"
+              />
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Customers Tab (Database Pelanggan) ----------
+function CustomersTab({ api, password }) {
+  const [items, setItems] = useState([]);
+  const [q, setQ] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [detail, setDetail] = useState(null); // {customer, orders}
+  const [exportFmt, setExportFmt] = useState("xlsx");
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const r = await api.get("/admin/customers");
+      setItems(r.data);
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+
+  const filtered = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    if (!s) return items;
+    return items.filter(
+      (c) => (c.name || "").toLowerCase().includes(s) || (c.whatsapp || "").toLowerCase().includes(s)
+    );
+  }, [items, q]);
+
+  const openDetail = async (c) => {
+    try {
+      const r = await api.get(`/admin/customers/${encodeURIComponent(c.whatsapp)}/orders`);
+      setDetail({ customer: c, orders: r.data });
+    } catch {
+      toast.error("Gagal memuat riwayat order");
+    }
+  };
+
+  const exportCustomers = async () => {
+    try {
+      await downloadAdminFile(password, "/admin/export/customers", { fmt: exportFmt });
+      toast.success("Daftar pelanggan diunduh");
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Gagal mengunduh");
+    }
+  };
+
+  return (
+    <div className="glass rounded-2xl p-6">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <h3 className="font-display text-lg">Database Pelanggan ({filtered.length})</h3>
+        <div className="flex items-center gap-2">
+          <Select value={exportFmt} onValueChange={setExportFmt}>
+            <SelectTrigger data-testid="customers-export-format" className="bg-[#0f1117] border-white/15 text-white w-28 h-9">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="bg-[#1a1d27] border-white/10 text-white">
+              <SelectItem value="xlsx">XLSX</SelectItem>
+              <SelectItem value="csv">CSV</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button
+            data-testid="customers-export-btn"
+            onClick={exportCustomers}
+            className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold"
+            size="sm"
+          >
+            <Download size={14} className="mr-2" /> Export
+          </Button>
+        </div>
+      </div>
+
+      <div className="relative mb-4">
+        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-white/40" />
+        <Input
+          data-testid="customers-search"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Cari nama atau nomor WA…"
+          className="pl-9 bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
+        />
+      </div>
+
+      <Table>
+        <TableHeader>
+          <TableRow className="border-white/10 hover:bg-transparent">
+            <TableHead className="text-white/60">Nama</TableHead>
+            <TableHead className="text-white/60">Nomor WA</TableHead>
+            <TableHead className="text-white/60">Total Order</TableHead>
+            <TableHead className="text-white/60">Total Belanja</TableHead>
+            <TableHead className="text-white/60">Order Terakhir</TableHead>
+            <TableHead className="text-white/60 text-right">Aksi</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {loading && (
+            <TableRow><TableCell colSpan={6} className="text-center text-white/40 py-6">Memuat…</TableCell></TableRow>
+          )}
+          {!loading && filtered.map((c) => (
+            <TableRow
+              key={c.whatsapp}
+              className="border-white/5 cursor-pointer hover:bg-white/[0.02]"
+              data-testid={`customer-row-${c.whatsapp}`}
+              onClick={() => openDetail(c)}
+            >
+              <TableCell className="text-sm">{c.name}</TableCell>
+              <TableCell className="font-mono text-xs">{c.whatsapp}</TableCell>
+              <TableCell className="text-sm">{c.total_orders}</TableCell>
+              <TableCell className="gold-text font-semibold">{formatIDR(c.total_spent)}</TableCell>
+              <TableCell className="text-xs text-white/60">
+                {c.last_order_at ? new Date(c.last_order_at).toLocaleDateString("id-ID") : "-"}
+              </TableCell>
+              <TableCell className="text-right">
+                <button className="text-xs text-[#F5A623] hover:underline" data-testid={`view-customer-${c.whatsapp}`}>
+                  Lihat Detail
+                </button>
+              </TableCell>
+            </TableRow>
+          ))}
+          {!loading && filtered.length === 0 && (
+            <TableRow><TableCell colSpan={6} className="text-center text-white/40 py-6">Belum ada pelanggan</TableCell></TableRow>
+          )}
+        </TableBody>
+      </Table>
+
+      {detail && (
+        <CustomerDetailDialog
+          open={!!detail}
+          onOpenChange={(v) => !v && setDetail(null)}
+          data={detail}
+        />
+      )}
+    </div>
+  );
+}
+
+function CustomerDetailDialog({ open, onOpenChange, data }) {
+  const { customer, orders } = data;
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-[#1a1d27] border-white/10 text-white max-w-3xl" data-testid="customer-detail-dialog">
+        <DialogHeader>
+          <DialogTitle className="font-display text-xl">{customer.name}</DialogTitle>
+          <p className="text-xs font-mono text-[#F5A623]">+{customer.whatsapp}</p>
+        </DialogHeader>
+        <div className="grid grid-cols-3 gap-3 my-3">
+          <div className="rounded-lg bg-[#0f1117] p-3 border border-white/5">
+            <p className="text-[10px] uppercase tracking-wide text-white/50">Total Order</p>
+            <p className="text-lg font-semibold">{customer.total_orders}</p>
+          </div>
+          <div className="rounded-lg bg-[#0f1117] p-3 border border-white/5">
+            <p className="text-[10px] uppercase tracking-wide text-white/50">Total Belanja</p>
+            <p className="text-base font-semibold gold-text">{formatIDR(customer.total_spent)}</p>
+          </div>
+          <div className="rounded-lg bg-[#0f1117] p-3 border border-white/5">
+            <p className="text-[10px] uppercase tracking-wide text-white/50">Order Terakhir</p>
+            <p className="text-xs mt-1">
+              {customer.last_order_at ? new Date(customer.last_order_at).toLocaleDateString("id-ID") : "-"}
+            </p>
+          </div>
+        </div>
+        <div className="max-h-72 overflow-y-auto">
+          <Table>
+            <TableHeader>
+              <TableRow className="border-white/10 hover:bg-transparent">
+                <TableHead className="text-white/60">Order</TableHead>
+                <TableHead className="text-white/60">Produk</TableHead>
+                <TableHead className="text-white/60">Harga</TableHead>
+                <TableHead className="text-white/60">Status</TableHead>
+                <TableHead className="text-white/60">Tanggal</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {orders.map((o) => (
+                <TableRow key={o.id} className="border-white/5">
+                  <TableCell className="font-mono text-xs">{o.order_code}</TableCell>
+                  <TableCell className="text-sm">{o.product_name}</TableCell>
+                  <TableCell className="text-sm gold-text">{formatIDR(o.product_price)}</TableCell>
+                  <TableCell><Badge status={o.status} /></TableCell>
+                  <TableCell className="text-xs text-white/60">
+                    {o.created_at ? new Date(o.created_at).toLocaleDateString("id-ID") : "-"}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------- Affiliate Export Dialog (Single + Bulk) ----------
+function AffiliateExportDialog({ mode, affiliate, password, open, onOpenChange }) {
+  const [period, setPeriod] = useState("all");
+  const [fmt, setFmt] = useState("xlsx");
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (period === "custom" && (!start || !end)) {
+      toast.error("Tanggal awal & akhir wajib diisi untuk Custom Range");
+      return;
+    }
+    setBusy(true);
+    try {
+      const params = { period, fmt };
+      if (period === "custom") {
+        params.start = start;
+        params.end = end;
+      }
+      const path =
+        mode === "single"
+          ? `/admin/export/affiliates/${affiliate.affiliate_code}`
+          : "/admin/export/affiliates";
+      await downloadAdminFile(password, path, params);
+      toast.success("Laporan affiliate diunduh");
+      onOpenChange(false);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Gagal mengunduh");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const title = mode === "single"
+    ? `Export Affiliate: ${affiliate?.name}`
+    : "Export Semua Affiliate";
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-[#1a1d27] border-white/10 text-white" data-testid="affiliate-export-dialog">
+        <DialogHeader>
+          <DialogTitle className="font-display text-lg">{title}</DialogTitle>
+          {mode === "single" && (
+            <p className="text-xs font-mono text-[#F5A623]">{affiliate?.affiliate_code}</p>
+          )}
+          {mode === "all" && (
+            <p className="text-xs text-white/55">
+              XLSX = 1 sheet per affiliate. CSV = 1 baris per order dengan kolom nama affiliate.
+            </p>
+          )}
+        </DialogHeader>
+        <div className="space-y-3 mt-2">
+          <div>
+            <Label className="text-[11px] uppercase tracking-wide text-white/60">Periode</Label>
+            <Select value={period} onValueChange={setPeriod}>
+              <SelectTrigger data-testid="aff-export-period" className="mt-1 bg-[#0f1117] border-white/15 text-white">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="bg-[#1a1d27] border-white/10 text-white">
+                <SelectItem value="all">Semua Waktu</SelectItem>
+                <SelectItem value="month">Bulan Ini</SelectItem>
+                <SelectItem value="custom">Custom Range</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label className="text-[11px] uppercase tracking-wide text-white/60">Format</Label>
+            <Select value={fmt} onValueChange={setFmt}>
+              <SelectTrigger data-testid="aff-export-format" className="mt-1 bg-[#0f1117] border-white/15 text-white">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="bg-[#1a1d27] border-white/10 text-white">
+                <SelectItem value="xlsx">XLSX (Excel)</SelectItem>
+                <SelectItem value="csv">CSV</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {period === "custom" && (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-[11px] uppercase tracking-wide text-white/60">Tanggal Awal</Label>
+                <Input
+                  data-testid="aff-export-start"
+                  type="date"
+                  value={start}
+                  onChange={(e) => setStart(e.target.value)}
+                  className="mt-1 bg-[#0f1117] border-white/15 text-white"
+                />
+              </div>
+              <div>
+                <Label className="text-[11px] uppercase tracking-wide text-white/60">Tanggal Akhir</Label>
+                <Input
+                  data-testid="aff-export-end"
+                  type="date"
+                  value={end}
+                  onChange={(e) => setEnd(e.target.value)}
+                  className="mt-1 bg-[#0f1117] border-white/15 text-white"
+                />
+              </div>
+            </div>
+          )}
+        </div>
+        <DialogFooter className="mt-4">
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            className="bg-transparent border-white/20 hover:bg-white/5 text-white"
+          >
+            Batal
+          </Button>
+          <Button
+            data-testid="aff-export-submit"
+            onClick={submit}
+            disabled={busy}
+            className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold"
+          >
+            {busy ? <Loader2 className="animate-spin" size={14} /> : <><Download size={14} className="mr-2" /> Download</>}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
