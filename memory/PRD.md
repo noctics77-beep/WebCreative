@@ -1,59 +1,60 @@
-# CreativeStore — PRD
+# CreativeStore — Product Requirements Document
 
 ## Original Problem Statement
-Full-stack "CreativeStore" web app — Indonesian-language digital-goods storefront with an Affiliate & Reseller partnership program. Dark navy (#0f1117) + gold (#F5A623) premium theme. Single-page app with routing, mobile responsive. No login on storefront/partnership pages, Affiliate logs in by Affiliate ID, Admin panel password protected.
+Import GitHub repo `https://github.com/noctics77-beep/WebCreative` (branch: main) and apply 5 enhancements (Bahasa Indonesia request):
+1. **Setup verification** — frontend/backend dependencies & seed data.
+2. **Chat Widget refactor** — switch from `EMERGENT_LLM_KEY` (Universal Key) to personal `GEMINI_API_KEY` using `google-generativeai` SDK (model `gemini-2.5-flash`). Graceful fallback "Asisten sedang offline" when key is empty.
+3. **Meta Pixel** — base code + events `ViewContent`, `InitiateCheckout`, `Purchase` (Pixel ID `2203703337115796` via `REACT_APP_META_PIXEL_ID`).
+4. **Google Analytics GA4** — base code + automatic pageviews + `purchase` event (Measurement ID `G-3F5MDW7N7R` via `REACT_APP_GA_MEASUREMENT_ID`).
+5. **Admin Panel Dashboard** — new default tab showing order stats, revenue, active affiliates, top products, and 7-day trend chart (real DB data).
 
-## User Choices Captured
-- Product images: external URL only
-- Notifications: Telegram bot (token & chat id provided)
-- Admin WhatsApp: 6287741449684
-- Admin password: `Blokirsandi12`
-- Affiliate login: by Affiliate ID only
-- Logo: custom uploaded by user (gold "CA" mark + "Access • Premium • Trusted" tagline)
+## User Persona
+- **Owner/Admin** — manages products, orders, affiliates from `/admin` panel.
+- **Customer** — browses storefront, opens OrderModal, pays via Pakasir/QRIS.
+- **Affiliate** — logs in via Affiliate ID (`AFFXXXXX`) to track referrals & commission.
 
-## Architecture
-- Backend: FastAPI + MongoDB (Motor), httpx for Telegram, all routes under `/api`
-- Frontend: React (CRA) + React Router + Shadcn UI + Sonner + Tailwind, fonts Outfit + Manrope
-- Models: products, orders, affiliates, withdrawals (UUID `id` field, no ObjectId leak)
+## Tech Stack
+- React 18 + Tailwind CSS + Recharts (frontend)
+- FastAPI + Motor async MongoDB driver (backend)
+- google-generativeai SDK (Gemini 2.5 Flash) for Chat
+- Meta Pixel + GA4 gtag.js for analytics
+- Pakasir for QRIS payments
 
-## Implemented (Feb 2026 — Day 1)
-- Storefront `/` — hero, 6 seeded products, discount badges, order modal with QRIS/Transfer choice
-- Referral tracking via `?ref=AFFXXXXX` URL param → captured in order, banner shown in modal
-- Partnership `/partnership` — Affiliate registration form (auto-generates AFFXXXXX + referral link) and Reseller WhatsApp redirect to 6287741449684
-- Affiliate Dashboard `/affiliate` — login by ID, shows balance + total earned + total withdrawn, sales history, withdrawal history, request WD form
-- Admin Panel `/admin` — password protected (env), 4 tabs: Products (CRUD with discount toggle, commission %, stock), Orders (confirm = auto pay commission, cancel), Affiliates list, Withdrawals (approve = increment total_withdrawn, reject = refund balance)
-- Telegram notification on new order, new affiliate, new WD request
-- All copy in Bahasa Indonesia
-- Tested: 18/18 backend pytest pass; frontend critical flows verified
+## Implemented Features (as of Feb 22, 2026)
+- [x] Storefront with product catalog, hero, social proof badge
+- [x] OrderModal flow (product details → form → payment → status polling)
+- [x] Pakasir QRIS payment integration + webhook
+- [x] Affiliate system (referral codes, commission, balance, withdrawal)
+- [x] Daily check-in / Poin Harian loyalty
+- [x] Admin Panel: Products, Orders, Affiliates CRUD
+- [x] **NEW** Admin Panel Dashboard tab (default) — order stats, revenue, top products, 7-day Recharts trend
+- [x] **NEW** Chat Widget powered by Gemini 2.5 Flash (`google-generativeai` SDK), graceful "Asisten sedang offline" fallback
+- [x] **NEW** Meta Pixel tracking (ViewContent, InitiateCheckout, Purchase) — dedupe via sessionStorage
+- [x] **NEW** GA4 tracking (pageviews, view_item, begin_checkout, purchase)
+- [x] **NEW** Regression test suite (`/app/backend/tests/`) — 28/28 passing
 
-## Backlog (P0 / P1 / P2)
-- P1: Sales analytics dashboard for admin (charts of orders/commission per day)
-- P1: Email/Telegram OTP for affiliate login (instead of plain ID) for security
-- P1: Bulk product import via CSV
-- P2: Storefront search + category filter
-- P2: Affiliate leaderboard for gamification
-- P2: Payment gateway integration (real QRIS/Midtrans) instead of manual confirmation
-- P2: Product detail page with full description + screenshots gallery
+## Verification Status (Feb 22, 2026)
+- Backend pytest: **28/28 PASS** (18 regression + 10 new)
+- Frontend e2e (testing_agent_v3_fork): **PASS** — tracking scripts loaded, OrderModal fires all events, ChatWidget shows fallback bubble, Admin Dashboard renders with Recharts chart.
+- Reports: `/app/test_reports/iteration_2.json`, `/app/test_reports/pytest/pytest_results.xml`
 
-## Ganti Password Admin (Jun 18, 2026 — DONE)
-- Tab baru "Keamanan" di Admin Panel: Password Lama, Password Baru, Konfirmasi Password Baru.
-- Validasi (frontend + backend): password lama harus benar, baru == konfirmasi, min 8 karakter.
-- `POST /api/admin/change-password` (header X-Admin-Password) → simpan bcrypt hash di `settings` doc `id="admin_auth"`.
-- Login & `verify_admin` cek hash DB jika ada, fallback ke `.env ADMIN_PASSWORD`. Frontend update localStorage `cs_admin_pw` agar sesi lanjut tetap valid.
-- Tested: curl (semua validasi, login pw baru, tolak pw lama, protected route, bcrypt $2b$ tersimpan) + frontend e2e (toast "Password berhasil diubah").
+## Pending / Backlog
+### P1 — Awaiting user input
+- 🔑 **Personal `GEMINI_API_KEY`** — currently empty in `backend/.env`; chat falls back to "Asisten sedang offline".
+- 📊 **Server-side tracking** (Meta CAPI + GA4 Measurement Protocol) for manual order approvals in admin — requires Meta CAPI Access Token + GA4 API Secret.
 
-## Next Tasks
-- Real payment gateway integration (Midtrans/Xendit)
-- Image upload (object storage) instead of URL-only
-- Email receipt to buyer
+### P2 — Code quality
+- Split `/app/backend/server.py` (1055 lines) into `routers/orders.py`, `routers/admin.py`, `routers/loyalty.py`.
+- Add E2E Playwright tests for admin login → dashboard → chart render.
 
-## Pakasir Automated QRIS (Jun 18, 2026 — DONE)
-- New payment method `qris_otomatis` alongside QRIS Manual & Transfer Bank.
-- Backend `/app/backend/pakasir.py`: create_qris, get_transaction (authoritative verification), cancel_transaction, qr_to_data_uri (qrcode lib).
-- `POST /api/orders` with `qris_otomatis` → calls Pakasir `transactioncreate/qris` (LIVE/production project), stores qr string/total/fee, sets 15-min `expires_at`, returns base64 QR image.
-- `GET /api/orders/{order_code}/status` → polled by frontend; verifies via Pakasir transactiondetail, settles on "completed", auto-expires after 15 min (cancels Pakasir txn, no reuse).
-- `POST /api/pakasir/webhook` → re-verifies via transactiondetail before settling (webhook is unsigned per docs).
-- `_settle_paid_order()` → idempotent: marks confirmed + pays affiliate commission once + Telegram "Lunas - Terverifikasi Otomatis". Unit tested in `tests/test_pakasir_settle.py`.
-- Frontend `OrderModal.jsx`: dynamic QR display, 15-min countdown, 4s status polling, expired/new-order UI, auto success screen.
-- WEBHOOK URL to register in Pakasir dashboard (Edit Proyek): `{APP_URL}/api/pakasir/webhook` (use the DEPLOYED url, not preview).
-- Tested: real Pakasir API create + status (curl), settlement idempotency (pytest), frontend QR/countdown (screenshot e2e). Could NOT simulate real payment (project is in production mode, simulation disabled).
+## Key API Endpoints
+- `GET /api/products` — public storefront
+- `POST /api/orders` — create order
+- `GET /api/orders/{order_code}` — status polling
+- `POST /api/chat` — Gemini chat (with offline fallback)
+- `GET /api/admin/dashboard` — admin metrics (X-Admin-Password header)
+- `GET /api/affiliates` — admin only
+
+## Environment Variables
+- Backend: `MONGO_URL`, `DB_NAME`, `ADMIN_PASSWORD`, `GEMINI_API_KEY`, `PAKASIR_API_KEY`, `PAKASIR_PROJECT_SLUG`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `ADMIN_WHATSAPP`
+- Frontend: `REACT_APP_BACKEND_URL`, `REACT_APP_META_PIXEL_ID`, `REACT_APP_GA_MEASUREMENT_ID`
