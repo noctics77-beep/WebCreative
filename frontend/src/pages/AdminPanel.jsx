@@ -1092,11 +1092,11 @@ function DashboardTab({ api, password }) {
         />
         <SmallStat
           label="Total Komisi Earned"
-          value={`Rp ${formatIDR(data.total_commission_earned)}`}
+          value={formatIDR(data.total_commission_earned)}
         />
         <SmallStat
           label="Total Komisi Terbayar"
-          value={`Rp ${formatIDR(data.total_commission_paid)}`}
+          value={formatIDR(data.total_commission_paid)}
         />
       </div>
 
@@ -1127,7 +1127,7 @@ function DashboardTab({ api, password }) {
                 <div className="text-white/80 font-medium">
                   {p.orders.toLocaleString("id-ID")} order
                 </div>
-                <div className="text-white/50">Rp {formatIDR(p.revenue)}</div>
+                <div className="text-white/50">{formatIDR(p.revenue)}</div>
               </div>
             </div>
           ))}
@@ -1156,7 +1156,7 @@ function StatCard({ label, orders, revenue, accent = "from-white/10 to-white/0" 
           </div>
           <div className="text-right">
             <p className="text-lg font-semibold text-[#D4AF37]">
-              Rp {formatIDR(revenue)}
+              {formatIDR(revenue)}
             </p>
             <p className="text-[11px] text-white/50">Omzet</p>
           </div>
@@ -1235,7 +1235,7 @@ function TrendChart({ data }) {
               }}
               labelStyle={{ color: "#D4AF37" }}
               formatter={(value, name) => {
-                if (name === "revenue") return [`Rp ${formatIDR(value)}`, "Omzet"];
+                if (name === "revenue") return [formatIDR(value), "Omzet"];
                 return [value, "Order"];
               }}
             />
