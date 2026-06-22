@@ -14,6 +14,11 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { api, formatIDR } from "@/lib/api";
 import { toast } from "sonner";
 import { CheckCircle2, Copy, Loader2, Clock, ShieldCheck, QrCode } from "lucide-react";
+import {
+  trackViewContent,
+  trackInitiateCheckout,
+  trackPurchase,
+} from "@/lib/tracking";
 
 const PAYMENT_OPTIONS = [
   { value: "qris_otomatis", label: "QRIS Otomatis", icon: QrCode },
@@ -50,8 +55,12 @@ export default function OrderModal({ open, onClose, product, referral }) {
           })
         )
         .catch(() => {});
+      // Track ViewContent when user opens product detail / order modal
+      if (product) {
+        trackViewContent(product);
+      }
     }
-  }, [open]);
+  }, [open, product]);
 
   // Countdown ticker for QRIS Otomatis
   useEffect(() => {
@@ -81,6 +90,13 @@ export default function OrderModal({ open, onClose, product, referral }) {
         if (r.data.status === "paid") {
           setAutoPaid(true);
           setStep("success");
+          // Track Purchase when order is auto-confirmed paid via Pakasir webhook
+          trackPurchase({
+            order_code: orderCode,
+            product_id: product?.id,
+            product_name: product?.name,
+            pakasir_total: autoData?.pakasir_total ?? finalPrice,
+          });
           clearInterval(pollRef.current);
         } else if (r.data.status === "expired") {
           setExpired(true);
@@ -136,6 +152,11 @@ export default function OrderModal({ open, onClose, product, referral }) {
       toast.error("Mohon lengkapi nama dan kontak");
       return;
     }
+    // Track InitiateCheckout when user submits the order form
+    trackInitiateCheckout({
+      product,
+      payment_method: form.payment_method,
+    });
     if (form.payment_method === "qris_otomatis") {
       // Create order immediately to generate dynamic QRIS
       setLoading(true);

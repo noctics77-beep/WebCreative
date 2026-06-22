@@ -655,6 +655,165 @@ async def root():
     return {"message": "CreativeStore API"}
 
 
+# ---------- Admin Dashboard / Evaluasi ----------
+def _start_of_day_utc(dt: datetime) -> datetime:
+    return dt.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+@api_router.get("/admin/dashboard")
+async def admin_dashboard(x_admin_password: Optional[str] = Header(None)):
+    """Return aggregated metrics for the admin evaluation dashboard.
+
+    All numbers are computed from real `orders`, `affiliates`, and `withdrawals`
+    collections — no mock data.
+    """
+    await verify_admin(x_admin_password)
+
+    now = datetime.now(timezone.utc)
+    today_start = _start_of_day_utc(now)
+    week_start = today_start - timedelta(days=6)  # last 7 days incl. today
+    month_start = today_start - timedelta(days=29)  # last 30 days incl. today
+
+    today_iso = today_start.isoformat()
+    week_iso = week_start.isoformat()
+    month_iso = month_start.isoformat()
+
+    paid_match = {"status": "confirmed"}
+
+    async def _agg(start_iso: str):
+        pipeline = [
+            {"$match": {**paid_match, "created_at": {"$gte": start_iso}}},
+            {
+                "$group": {
+                    "_id": None,
+                    "count": {"$sum": 1},
+                    "revenue": {
+                        "$sum": {
+                            "$ifNull": ["$pakasir_total", "$product_price"]
+                        }
+                    },
+                }
+            },
+        ]
+        rows = await db.orders.aggregate(pipeline).to_list(1)
+        if not rows:
+            return {"count": 0, "revenue": 0.0}
+        return {"count": int(rows[0]["count"]), "revenue": float(rows[0]["revenue"] or 0)}
+
+    today_stats = await _agg(today_iso)
+    week_stats = await _agg(week_iso)
+    month_stats = await _agg(month_iso)
+
+    # Active affiliates = those with at least 1 confirmed order OR balance > 0
+    active_aff_codes = set()
+    sales_pipeline = [
+        {"$match": {**paid_match, "referral_affiliate_code": {"$ne": None}}},
+        {"$group": {"_id": "$referral_affiliate_code"}},
+    ]
+    async for r in db.orders.aggregate(sales_pipeline):
+        if r.get("_id"):
+            active_aff_codes.add(r["_id"])
+    async for a in db.affiliates.find({"balance": {"$gt": 0}}, {"affiliate_code": 1, "_id": 0}):
+        if a.get("affiliate_code"):
+            active_aff_codes.add(a["affiliate_code"])
+    active_affiliates = len(active_aff_codes)
+
+    # Total commission paid out = sum of approved withdrawals
+    wd_pipeline = [
+        {"$match": {"status": "approved"}},
+        {"$group": {"_id": None, "total": {"$sum": "$amount"}}},
+    ]
+    wd_rows = await db.withdrawals.aggregate(wd_pipeline).to_list(1)
+    total_commission_paid = float(wd_rows[0]["total"]) if wd_rows else 0.0
+
+    # Total commission earned (all-time) across affiliates
+    earned_rows = await db.affiliates.aggregate(
+        [{"$group": {"_id": None, "total": {"$sum": "$total_earned"}}}]
+    ).to_list(1)
+    total_commission_earned = float(earned_rows[0]["total"]) if earned_rows else 0.0
+
+    # Top products by confirmed order count
+    top_pipeline = [
+        {"$match": paid_match},
+        {
+            "$group": {
+                "_id": "$product_id",
+                "name": {"$first": "$product_name"},
+                "orders": {"$sum": 1},
+                "revenue": {
+                    "$sum": {"$ifNull": ["$pakasir_total", "$product_price"]}
+                },
+            }
+        },
+        {"$sort": {"orders": -1}},
+        {"$limit": 5},
+    ]
+    top_products = []
+    async for r in db.orders.aggregate(top_pipeline):
+        top_products.append(
+            {
+                "product_id": r["_id"],
+                "name": r.get("name") or "Produk",
+                "orders": int(r["orders"]),
+                "revenue": float(r["revenue"] or 0),
+            }
+        )
+
+    # 7-day trend (UTC days)
+    trend = []
+    for i in range(6, -1, -1):
+        day_start = today_start - timedelta(days=i)
+        day_end = day_start + timedelta(days=1)
+        pipeline = [
+            {
+                "$match": {
+                    **paid_match,
+                    "created_at": {
+                        "$gte": day_start.isoformat(),
+                        "$lt": day_end.isoformat(),
+                    },
+                }
+            },
+            {
+                "$group": {
+                    "_id": None,
+                    "count": {"$sum": 1},
+                    "revenue": {
+                        "$sum": {"$ifNull": ["$pakasir_total", "$product_price"]}
+                    },
+                }
+            },
+        ]
+        rows = await db.orders.aggregate(pipeline).to_list(1)
+        if rows:
+            trend.append(
+                {
+                    "date": day_start.date().isoformat(),
+                    "orders": int(rows[0]["count"]),
+                    "revenue": float(rows[0]["revenue"] or 0),
+                }
+            )
+        else:
+            trend.append(
+                {
+                    "date": day_start.date().isoformat(),
+                    "orders": 0,
+                    "revenue": 0.0,
+                }
+            )
+
+    return {
+        "today": today_stats,
+        "week": week_stats,
+        "month": month_stats,
+        "active_affiliates": active_affiliates,
+        "total_commission_paid": total_commission_paid,
+        "total_commission_earned": total_commission_earned,
+        "top_products": top_products,
+        "trend_7d": trend,
+    }
+
+
 # ---------- Loyalty / Daily Check-in ----------
 class LoyaltyRegister(BaseModel):
     name: str
@@ -832,27 +991,49 @@ class ChatMessage(BaseModel):
 
 @api_router.post("/chat")
 async def chat_endpoint(payload: ChatMessage):
-    api_key = EMERGENT_LLM_KEY or GEMINI_API_KEY
-    if not api_key:
-        raise HTTPException(503, "AI chat belum dikonfigurasi. Hubungi admin.")
-    try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-    except Exception as e:
-        raise HTTPException(500, f"Library error: {e}")
+    """Chat endpoint using Google Generative AI SDK (gemini-2.5-flash).
 
+    Gracefully returns an "offline" reply when GEMINI_API_KEY is not configured,
+    so the chat widget can show a friendly fallback instead of erroring out.
+    """
     session_id = payload.session_id or str(uuid.uuid4())
-    chat = LlmChat(
-        api_key=api_key,
-        session_id=session_id,
-        system_message=CHAT_SYSTEM_PROMPT,
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+
+    if not GEMINI_API_KEY:
+        return {
+            "reply": "Asisten sedang offline. Mohon hubungi admin via WhatsApp (link di pojok kanan bawah) atau coba lagi nanti ya 🙏",
+            "session_id": session_id,
+            "offline": True,
+        }
 
     try:
-        reply = await chat.send_message(UserMessage(text=payload.message))
-        return {"reply": str(reply), "session_id": session_id}
+        import google.generativeai as genai
     except Exception as e:
-        logger.error(f"LLM error: {e}")
-        raise HTTPException(500, "Maaf, AI sedang sibuk. Coba lagi sebentar 🙏")
+        logger.error(f"google-generativeai import error: {e}")
+        return {
+            "reply": "Asisten sedang offline. Coba lagi sebentar ya 🙏",
+            "session_id": session_id,
+            "offline": True,
+        }
+
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel(
+            model_name="gemini-2.5-flash",
+            system_instruction=CHAT_SYSTEM_PROMPT,
+        )
+        # Single-turn for now (session_id reserved for future conversation memory)
+        resp = await model.generate_content_async(payload.message)
+        text = (getattr(resp, "text", None) or "").strip()
+        if not text:
+            text = "Maaf, saya belum bisa menjawab itu. Coba pertanyaan lain ya 🙂"
+        return {"reply": text, "session_id": session_id}
+    except Exception as e:
+        logger.error(f"Gemini error: {e}")
+        return {
+            "reply": "Maaf, AI sedang sibuk. Coba lagi sebentar 🙏",
+            "session_id": session_id,
+            "offline": True,
+        }
 
 
 app.include_router(api_router)

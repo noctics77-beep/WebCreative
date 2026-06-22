@@ -1,5 +1,11 @@
 import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { useEffect } from "react";
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  useLocation,
+} from "react-router-dom";
 import { Toaster } from "sonner";
 import Storefront from "@/pages/Storefront";
 import Partnership from "@/pages/Partnership";
@@ -9,11 +15,25 @@ import LoyaltyPage from "@/pages/LoyaltyPage";
 import NavBar from "@/components/NavBar";
 import Footer from "@/components/Footer";
 import ChatWidget from "@/components/ChatWidget";
+import { initTracking, trackPageView } from "@/lib/tracking";
+
+function RouteTracker() {
+  const location = useLocation();
+  useEffect(() => {
+    trackPageView(location.pathname + location.search);
+  }, [location.pathname, location.search]);
+  return null;
+}
 
 export default function App() {
+  useEffect(() => {
+    initTracking();
+  }, []);
+
   return (
     <div className="App min-h-screen bg-[#0f1117] text-white">
       <BrowserRouter>
+        <RouteTracker />
         <NavBar />
         <Routes>
           <Route path="/" element={<Storefront />} />

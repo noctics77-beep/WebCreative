@@ -118,8 +118,9 @@ export default function AdminPanel() {
         </Button>
       </div>
 
-      <Tabs defaultValue="products" className="w-full">
-        <TabsList className="bg-[#1a1d27] border border-white/5">
+      <Tabs defaultValue="dashboard" className="w-full">
+        <TabsList className="bg-[#1a1d27] border border-white/5 flex-wrap h-auto">
+          <TabsTrigger value="dashboard" data-testid="tab-dashboard">Dashboard</TabsTrigger>
           <TabsTrigger value="products" data-testid="tab-products">Produk</TabsTrigger>
           <TabsTrigger value="orders" data-testid="tab-orders">Order</TabsTrigger>
           <TabsTrigger value="affiliates" data-testid="tab-affiliates">Affiliate</TabsTrigger>
@@ -129,6 +130,9 @@ export default function AdminPanel() {
           <TabsTrigger value="security" data-testid="tab-security">Keamanan</TabsTrigger>
         </TabsList>
 
+        <TabsContent value="dashboard" className="mt-6">
+          <DashboardTab api={api} />
+        </TabsContent>
         <TabsContent value="products" className="mt-6">
           <ProductsTab api={api} />
         </TabsContent>
@@ -941,3 +945,265 @@ const Badge = ({ status }) => {
     </span>
   );
 };
+
+
+// ---------- Dashboard / Evaluasi ----------
+function DashboardTab({ api }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const load = () => {
+    setLoading(true);
+    api
+      .get("/admin/dashboard")
+      .then((r) => {
+        setData(r.data);
+        setError(null);
+      })
+      .catch((e) => {
+        setError(e?.response?.data?.detail || "Gagal memuat dashboard");
+      })
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 text-white/60">
+        <Loader2 size={16} className="animate-spin" /> Memuat data evaluasi…
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">
+        {error}
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={load}
+          className="ml-3 bg-transparent border-white/20 hover:bg-white/5 text-white"
+        >
+          Coba lagi
+        </Button>
+      </div>
+    );
+  }
+  if (!data) return null;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-semibold">Ringkasan Evaluasi</h2>
+          <p className="text-xs text-white/50">
+            Statistik real-time dari order, affiliate, dan withdrawal yang
+            terkonfirmasi lunas.
+          </p>
+        </div>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={load}
+          className="bg-transparent border-white/20 hover:bg-white/5 text-white"
+        >
+          Refresh
+        </Button>
+      </div>
+
+      {/* Stat Cards: Today / Week / Month */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <StatCard
+          label="Hari Ini"
+          orders={data.today.count}
+          revenue={data.today.revenue}
+          accent="from-[#D4AF37]/30 to-[#D4AF37]/5"
+        />
+        <StatCard
+          label="7 Hari Terakhir"
+          orders={data.week.count}
+          revenue={data.week.revenue}
+          accent="from-emerald-500/30 to-emerald-500/5"
+        />
+        <StatCard
+          label="30 Hari Terakhir"
+          orders={data.month.count}
+          revenue={data.month.revenue}
+          accent="from-sky-500/30 to-sky-500/5"
+        />
+      </div>
+
+      {/* Affiliate summary */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <SmallStat
+          label="Affiliate Aktif"
+          value={data.active_affiliates.toLocaleString("id-ID")}
+        />
+        <SmallStat
+          label="Total Komisi Earned"
+          value={`Rp ${formatIDR(data.total_commission_earned)}`}
+        />
+        <SmallStat
+          label="Total Komisi Terbayar"
+          value={`Rp ${formatIDR(data.total_commission_paid)}`}
+        />
+      </div>
+
+      {/* 7-day trend chart */}
+      <TrendChart data={data.trend_7d || []} />
+
+      {/* Top products */}
+      <div className="rounded-xl border border-white/10 bg-[#1a1d27] p-5">
+        <h3 className="text-sm font-semibold text-white/90 mb-3">
+          Produk Terlaris
+        </h3>
+        {(!data.top_products || data.top_products.length === 0) && (
+          <p className="text-xs text-white/50">Belum ada data.</p>
+        )}
+        <div className="space-y-2">
+          {(data.top_products || []).map((p, i) => (
+            <div
+              key={p.product_id || i}
+              className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-white/5 border border-white/5"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <span className="w-6 h-6 rounded-full bg-[#D4AF37]/15 text-[#D4AF37] text-xs font-semibold flex items-center justify-center">
+                  {i + 1}
+                </span>
+                <span className="text-sm text-white/90 truncate">{p.name}</span>
+              </div>
+              <div className="text-right text-xs">
+                <div className="text-white/80 font-medium">
+                  {p.orders.toLocaleString("id-ID")} order
+                </div>
+                <div className="text-white/50">Rp {formatIDR(p.revenue)}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StatCard({ label, orders, revenue, accent = "from-white/10 to-white/0" }) {
+  return (
+    <div
+      className={`relative overflow-hidden rounded-xl border border-white/10 bg-[#1a1d27] p-5`}
+    >
+      <div
+        className={`absolute inset-0 bg-gradient-to-br ${accent} pointer-events-none`}
+      />
+      <div className="relative">
+        <p className="text-xs uppercase tracking-wide text-white/60">{label}</p>
+        <div className="mt-3 flex items-end justify-between gap-3">
+          <div>
+            <p className="text-2xl font-semibold text-white">
+              {Number(orders || 0).toLocaleString("id-ID")}
+            </p>
+            <p className="text-[11px] text-white/50">Order lunas</p>
+          </div>
+          <div className="text-right">
+            <p className="text-lg font-semibold text-[#D4AF37]">
+              Rp {formatIDR(revenue)}
+            </p>
+            <p className="text-[11px] text-white/50">Omzet</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SmallStat({ label, value }) {
+  return (
+    <div className="rounded-xl border border-white/10 bg-[#1a1d27] p-4">
+      <p className="text-[11px] uppercase tracking-wide text-white/50">{label}</p>
+      <p className="mt-1 text-base font-semibold text-white">{value}</p>
+    </div>
+  );
+}
+
+function TrendChart({ data }) {
+  // Lazy import recharts to avoid SSR issues; safe in CRA dev too.
+  // eslint-disable-next-line global-require
+  const {
+    ResponsiveContainer,
+    LineChart,
+    Line,
+    XAxis,
+    YAxis,
+    Tooltip,
+    CartesianGrid,
+  } = require("recharts");
+
+  const formatted = (data || []).map((d) => {
+    const dt = new Date(d.date + "T00:00:00Z");
+    const label = dt.toLocaleDateString("id-ID", {
+      day: "2-digit",
+      month: "short",
+    });
+    return { ...d, label };
+  });
+
+  return (
+    <div className="rounded-xl border border-white/10 bg-[#1a1d27] p-5">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-semibold text-white/90">
+          Tren Order 7 Hari Terakhir
+        </h3>
+        <span className="text-[11px] text-white/40">
+          Berdasarkan order lunas
+        </span>
+      </div>
+      <div className="h-64">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={formatted} margin={{ top: 10, right: 16, left: 0, bottom: 0 }}>
+            <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
+            <XAxis
+              dataKey="label"
+              stroke="rgba(255,255,255,0.5)"
+              fontSize={11}
+              tickLine={false}
+              axisLine={{ stroke: "rgba(255,255,255,0.1)" }}
+            />
+            <YAxis
+              allowDecimals={false}
+              stroke="rgba(255,255,255,0.5)"
+              fontSize={11}
+              tickLine={false}
+              axisLine={{ stroke: "rgba(255,255,255,0.1)" }}
+            />
+            <Tooltip
+              contentStyle={{
+                background: "#0f1117",
+                border: "1px solid rgba(255,255,255,0.1)",
+                borderRadius: 8,
+                color: "#fff",
+                fontSize: 12,
+              }}
+              labelStyle={{ color: "#D4AF37" }}
+              formatter={(value, name) => {
+                if (name === "revenue") return [`Rp ${formatIDR(value)}`, "Omzet"];
+                return [value, "Order"];
+              }}
+            />
+            <Line
+              type="monotone"
+              dataKey="orders"
+              stroke="#D4AF37"
+              strokeWidth={2}
+              dot={{ r: 3, fill: "#D4AF37" }}
+              activeDot={{ r: 5 }}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
