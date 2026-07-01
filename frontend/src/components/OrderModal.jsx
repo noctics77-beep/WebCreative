@@ -236,6 +236,44 @@ export default function OrderModal({ open, onClose, product, referral }) {
             </DialogHeader>
 
             <form onSubmit={submit} className="space-y-4 pt-2">
+              {/* Product summary card */}
+              <div
+                data-testid="order-product-summary"
+                className="flex gap-3 items-start p-3 rounded-xl bg-[#22262f] border border-[#F5A623]/25"
+              >
+                {product.photo_url && (
+                  <img
+                    src={product.photo_url}
+                    alt={product.name}
+                    data-testid="order-product-thumb"
+                    className="w-20 h-20 rounded-lg object-cover flex-shrink-0 border border-white/5"
+                  />
+                )}
+                <div className="min-w-0 flex-1">
+                  <p
+                    data-testid="order-product-name"
+                    className="font-semibold text-[15px] text-white leading-snug"
+                  >
+                    {product.name}
+                  </p>
+                  <div className="flex items-baseline gap-2 mt-1" data-testid="order-product-price-block">
+                    {hasDiscount && (
+                      <span className="text-xs text-white/40 line-through">
+                        {formatIDR(product.original_price)}
+                      </span>
+                    )}
+                    <span className="text-[15px] font-semibold gold-text">
+                      {formatIDR(basePrice)}
+                    </span>
+                  </div>
+                  {product.description && (
+                    <p className="text-xs text-white/55 mt-1.5 line-clamp-2">
+                      {product.description}
+                    </p>
+                  )}
+                </div>
+              </div>
+
               <div>
                 <Label htmlFor="buyer_name" className="text-xs uppercase tracking-widest text-white/60">
                   Nama Lengkap
@@ -357,6 +395,14 @@ export default function OrderModal({ open, onClose, product, referral }) {
                   {loading ? <Loader2 className="animate-spin" size={16} /> : "Lanjut ke Pembayaran"}
                 </Button>
               </DialogFooter>
+              <p
+                data-testid="order-eta-note"
+                className="text-xs text-white/50 text-center leading-relaxed mt-3"
+              >
+                <Clock size={12} className="inline -mt-0.5 mr-1 text-[#F5A623]" />
+                Pesanan diproses dalam 1×24 jam hari kerja. Kami akan menghubungi kamu via
+                WhatsApp/Telegram setelah pembayaran dikonfirmasi.
+              </p>
             </form>
           </>
         )}
