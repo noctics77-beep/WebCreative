@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { api, formatIDR } from "@/lib/api";
+import { api, formatIDR, resolveImageUrl } from "@/lib/api";
 import { toast } from "sonner";
 import { CheckCircle2, Copy, Loader2, Clock, ShieldCheck, QrCode } from "lucide-react";
 import {
@@ -243,7 +243,7 @@ export default function OrderModal({ open, onClose, product, referral }) {
               >
                 {product.photo_url && (
                   <img
-                    src={product.photo_url}
+                    src={resolveImageUrl(product.photo_url)}
                     alt={product.name}
                     data-testid="order-product-thumb"
                     className="w-20 h-20 rounded-lg object-cover flex-shrink-0 border border-white/5"

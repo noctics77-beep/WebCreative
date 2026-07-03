@@ -14,6 +14,15 @@ export const adminApi = (password) =>
 export const formatIDR = (n) =>
   "Rp " + Number(n || 0).toLocaleString("id-ID", { maximumFractionDigits: 0 });
 
+/** Prepend backend URL if photo is a server-relative path (uploaded via admin). */
+export const resolveImageUrl = (url) => {
+  if (!url) return "";
+  if (url.startsWith("/api/") || url.startsWith("/uploads/")) {
+    return BACKEND_URL + (url.startsWith("/uploads/") ? "/api" + url : url);
+  }
+  return url;
+};
+
 export async function downloadAdminFile(password, path, params = {}) {
   const res = await axios.get(API + path, {
     headers: { "X-Admin-Password": password },

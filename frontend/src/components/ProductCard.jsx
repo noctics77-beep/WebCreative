@@ -1,4 +1,4 @@
-import { formatIDR } from "@/lib/api";
+import { formatIDR, resolveImageUrl } from "@/lib/api";
 import { ShoppingBag, Sparkles } from "lucide-react";
 
 export default function ProductCard({ product, onOrder }) {
@@ -14,7 +14,7 @@ export default function ProductCard({ product, onOrder }) {
     >
       <div className="relative aspect-[4/3] overflow-hidden bg-[#0a0c12]">
         <img
-          src={product.photo_url}
+          src={resolveImageUrl(product.photo_url)}
           alt={product.name}
           className="w-full h-full object-cover"
           onError={(e) => {

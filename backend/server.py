@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Header, Query, Response
+from fastapi import FastAPI, APIRouter, HTTPException, Header, Query, Response, UploadFile, File
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -1322,6 +1322,58 @@ def _public_order_view(o: dict) -> dict:
         "paid_at": o.get("paid_at"),
         "expires_at": o.get("expires_at"),
     }
+
+
+# ---------- Uploads (product photos stored in MongoDB) ----------
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB
+ALLOWED_IMAGE_TYPES = {
+    "image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif",
+}
+
+
+@api_router.post("/admin/uploads")
+async def admin_upload_image(
+    file: UploadFile = File(...),
+    x_admin_password: Optional[str] = Header(None),
+):
+    await verify_admin(x_admin_password)
+
+    content_type = (file.content_type or "").lower()
+    if content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(400, "File harus berupa gambar (JPG/PNG/WEBP/GIF)")
+
+    data = await file.read()
+    size = len(data)
+    if size > MAX_UPLOAD_BYTES:
+        raise HTTPException(400, f"Ukuran file maksimal 5MB (saat ini {size / 1024 / 1024:.1f}MB)")
+    if size == 0:
+        raise HTTPException(400, "File kosong")
+
+    upload_id = str(uuid.uuid4())
+    doc = {
+        "id": upload_id,
+        "filename": file.filename or f"{upload_id}",
+        "content_type": content_type,
+        "size": size,
+        "data": data,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.uploads.insert_one(doc)
+
+    # Return relative URL — frontend prepends REACT_APP_BACKEND_URL.
+    return {"url": f"/api/uploads/{upload_id}", "id": upload_id, "size": size}
+
+
+@api_router.get("/uploads/{upload_id}")
+async def get_upload(upload_id: str):
+    doc = await db.uploads.find_one({"id": upload_id})
+    if not doc:
+        raise HTTPException(404, "Upload tidak ditemukan")
+    return Response(
+        content=doc["data"],
+        media_type=doc.get("content_type", "application/octet-stream"),
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
 
 
 app.include_router(api_router)

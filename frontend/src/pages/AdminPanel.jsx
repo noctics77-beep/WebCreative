@@ -1,5 +1,5 @@
-import { useEffect, useState, useMemo } from "react";
-import { adminApi, formatIDR, downloadAdminFile } from "@/lib/api";
+import { useEffect, useState, useMemo, useRef } from "react";
+import { adminApi, formatIDR, downloadAdminFile, resolveImageUrl } from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -34,7 +34,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Edit, LogOut, Plus, Trash2, Loader2, Check, X, Download, Search } from "lucide-react";
+import { Edit, LogOut, Plus, Trash2, Loader2, Check, X, Download, Search, Upload, Link2, Image as ImageIcon } from "lucide-react";
 
 export default function AdminPanel() {
   const [password, setPassword] = useState(localStorage.getItem("cs_admin_pw") || "");
@@ -210,7 +210,7 @@ function ProductsTab({ api }) {
               <TableRow key={p.id} className="border-white/5" data-testid={`product-row-${p.id}`}>
                 <TableCell>
                   <div className="flex items-center gap-3">
-                    <img src={p.photo_url} alt="" className="w-10 h-10 rounded-md object-cover" />
+                    <img src={resolveImageUrl(p.photo_url)} alt="" className="w-10 h-10 rounded-md object-cover" />
                     <div>
                       <div className="text-sm font-medium">{p.name}</div>
                       <div className="text-xs text-white/40 line-clamp-1 max-w-xs">{p.description}</div>
@@ -328,9 +328,12 @@ function ProductFormDialog({ open, onOpenChange, editing, api, onSaved }) {
             <Input data-testid="pf-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
               className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]" />
           </Field>
-          <Field label="URL Foto">
-            <Input data-testid="pf-photo" value={form.photo_url} onChange={(e) => setForm({ ...form, photo_url: e.target.value })}
-              className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]" />
+          <Field label="Foto Produk">
+            <PhotoPicker
+              value={form.photo_url}
+              onChange={(url) => setForm({ ...form, photo_url: url })}
+              api={api}
+            />
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Harga Asli">
@@ -398,6 +401,154 @@ const Field = ({ label, children }) => (
     <div className="mt-1">{children}</div>
   </div>
 );
+
+const MAX_UPLOAD_MB = 5;
+
+function PhotoPicker({ value, onChange, api }) {
+  // Determine initial mode: if value looks like a server upload path, default to upload tab.
+  const initialMode = value && value.startsWith("/api/uploads/") ? "upload" : "url";
+  const [mode, setMode] = useState(initialMode);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState("");
+  const inputRef = useRef(null);
+
+  const handleFile = async (file) => {
+    setError("");
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setError("File harus berupa gambar (JPG/PNG/WEBP)");
+      return;
+    }
+    if (file.size > MAX_UPLOAD_MB * 1024 * 1024) {
+      setError(`Ukuran file maksimal ${MAX_UPLOAD_MB}MB (saat ini ${(file.size / 1024 / 1024).toFixed(1)}MB)`);
+      return;
+    }
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await api.post("/admin/uploads", fd, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+      onChange(res.data.url);
+      toast.success("Foto diupload");
+    } catch (e) {
+      const msg = e?.response?.data?.detail || "Upload gagal";
+      setError(msg);
+      toast.error(msg);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const preview = value ? resolveImageUrl(value) : "";
+
+  return (
+    <div data-testid="photo-picker" className="space-y-2">
+      <div className="flex gap-2">
+        <button
+          type="button"
+          data-testid="photo-mode-url"
+          onClick={() => setMode("url")}
+          className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-xs border transition-colors ${
+            mode === "url"
+              ? "bg-[#F5A623]/15 text-[#F5A623] border-[#F5A623]/40"
+              : "bg-[#0f1117] text-white/60 border-white/10 hover:text-white"
+          }`}
+        >
+          <Link2 size={13} /> URL Foto
+        </button>
+        <button
+          type="button"
+          data-testid="photo-mode-upload"
+          onClick={() => setMode("upload")}
+          className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-xs border transition-colors ${
+            mode === "upload"
+              ? "bg-[#F5A623]/15 text-[#F5A623] border-[#F5A623]/40"
+              : "bg-[#0f1117] text-white/60 border-white/10 hover:text-white"
+          }`}
+        >
+          <Upload size={13} /> Upload dari Device
+        </button>
+      </div>
+
+      {mode === "url" ? (
+        <Input
+          data-testid="pf-photo"
+          value={value || ""}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="https://…"
+          className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
+        />
+      ) : (
+        <div>
+          <input
+            ref={inputRef}
+            data-testid="pf-photo-file"
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => handleFile(e.target.files?.[0])}
+          />
+          <button
+            type="button"
+            data-testid="pf-photo-upload-btn"
+            onClick={() => inputRef.current?.click()}
+            disabled={uploading}
+            className="w-full flex items-center justify-center gap-2 px-3 py-4 rounded-md border border-dashed border-white/20 hover:border-[#F5A623]/40 bg-[#0f1117] text-sm text-white/70 hover:text-white transition-colors disabled:opacity-60"
+          >
+            {uploading ? (
+              <>
+                <Loader2 className="animate-spin" size={15} /> Mengupload…
+              </>
+            ) : (
+              <>
+                <Upload size={15} /> Pilih foto (maks {MAX_UPLOAD_MB}MB)
+              </>
+            )}
+          </button>
+        </div>
+      )}
+
+      {error && (
+        <p data-testid="pf-photo-error" className="text-xs text-red-400">
+          {error}
+        </p>
+      )}
+
+      {preview && (
+        <div
+          data-testid="pf-photo-preview"
+          className="flex items-center gap-3 p-2 rounded-md bg-[#0f1117] border border-white/10"
+        >
+          <img
+            src={preview}
+            alt="Preview"
+            className="w-16 h-16 rounded-md object-cover border border-white/10"
+            onError={(e) => {
+              e.currentTarget.style.display = "none";
+            }}
+          />
+          <div className="min-w-0 flex-1">
+            <p className="text-[11px] uppercase tracking-widest text-white/40 mb-0.5">Preview</p>
+            <p className="text-xs text-white/70 truncate font-mono" title={value}>
+              {value.startsWith("/api/uploads/") ? "📦 Tersimpan di server" : value}
+            </p>
+          </div>
+          <button
+            type="button"
+            data-testid="pf-photo-clear"
+            onClick={() => onChange("")}
+            className="p-1 rounded hover:bg-white/5 text-white/50 hover:text-white"
+            title="Hapus"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ---------- Orders ----------
 function OrdersTab({ api }) {

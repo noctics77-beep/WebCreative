@@ -1,0 +1,43 @@
+{
+  "summary": "Validated photo upload feature end-to-end. Backend: 7/7 new upload tests PASS (POST /api/admin/uploads success, 401 no-auth, 400 non-image, 400 >5MB, webp/gif accepted, GET 404, product persistence with relative URL). Backend regression: 61/61 tests PASS (54 prior + 7 new; test_pakasir_settle.py excluded due to pre-existing ModuleNotFoundError unrelated to this feature). Frontend: PhotoPicker renders both modes; URL mode preview + clear works; Upload mode POSTs to /api/admin/uploads (200 with {url,id,size}); preview displays uploaded image via resolveImageUrl. Storefront ProductCard shows uploaded photo (naturalWidth>0). OrderModal thumb shows uploaded photo. Regression: external URL products still render.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/uploads/{id}", "issue": "Backend sets Cache-Control: public, max-age=31536000, immutable correctly, but ingress (Cloudflare) rewrites it to 'no-store, no-cache, must-revalidate' on the public URL. Browsers will re-fetch every load, defeating the immutable cache. Verified: localhost:8001 returns immutable header; public URL returns no-store. Not fixable in app code — needs infra/ingress config change."},
+      {"endpoint": "backend/tests/test_pakasir_settle.py", "issue": "Pre-existing test file uses 'import server' which fails ModuleNotFoundError when pytest runs from /app root. Not caused by this iteration but blocks full-suite runs. Suggest fixing sys.path or using package import."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin ProductFormDialog", "issues": ["Minor a11y warning: DialogContent missing aria-describedby/Description (pre-existing, not from this feature)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_uploads.py",
+    "/app/test_reports/pytest/iter4_uploads.xml"
+  ],
+  "action_items": [
+    "(Optional) Investigate ingress Cache-Control override so uploaded product images can be cached long-term by browsers — either change ingress config or serve images from a subpath the ingress doesn't rewrite.",
+    "(Optional) Fix backend/tests/test_pakasir_settle.py import path so full pytest suite can run from /app."
+  ],
+  "critical_code_review_comments": [
+    "POST /api/admin/uploads reads full file into memory before size check — an attacker could send a 500MB upload and consume RAM before the 5MB limit rejects it. Consider streaming/reading chunks with an early cutoff OR check Content-Length header first.",
+    "Content-Type is trusted from client (`file.content_type`); a malicious client could send an executable with content_type='image/png'. Consider magic-byte sniffing (first bytes) for defense-in-depth.",
+    "MongoDB is not ideal for binary blobs at scale — 16MB doc limit per file is fine for 5MB images, but a large catalog will bloat the 'uploads' collection. Consider GridFS or object storage if catalog grows.",
+    "server.py now ~1416 lines — split into routers/uploads.py + others is overdue (flagged in iter3 too).",
+    "resolveImageUrl handles '/api/' and '/uploads/' — good; passes external http(s) URLs through unchanged (regression-safe).",
+    "PhotoPicker exposes rich data-testids (photo-picker, photo-mode-url, photo-mode-upload, pf-photo, pf-photo-file, pf-photo-upload-btn, pf-photo-preview, pf-photo-clear, pf-photo-error) — excellent for automation."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_uploads.py (new)"
+  ],
+  "success_rate": {"backend": "100% (7/7 new upload tests + 54/54 prior = 61/61)", "frontend": "100% — PhotoPicker, storefront card, OrderModal all show uploaded images correctly"},
+  "test_credentials": "Admin password: Blokirsandi12 (X-Admin-Password header)",
+  "seed_data_creation": "test_product_with_uploaded_photo_url_persists creates TEST_UploadPhoto and cleans up. UI test seeds TEST_UI_UploadedPhoto and cleans up via DELETE. Upload docs remain in db.uploads collection (no cleanup) — small footprint.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Upload feature fully working. Cache-Control immutable header is stripped by ingress on public URL — verify localhost:8001 directly for header assertions. Product model requires 'original_price' (not just 'price'). data-testids for PhotoPicker: photo-picker, photo-mode-url, photo-mode-upload, pf-photo, pf-photo-file (hidden input), pf-photo-upload-btn, pf-photo-preview, pf-photo-clear, pf-photo-error. Storefront card testid: product-card-{id}, order button: order-now-btn-{id}, OrderModal thumb: order-product-thumb.",
+  "rca of the issue": "N/A — no bugs found in the upload feature itself."
+}
