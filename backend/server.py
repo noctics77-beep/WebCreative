@@ -1333,10 +1333,16 @@ ALLOWED_IMAGE_TYPES = {
 
 @api_router.post("/admin/uploads")
 async def admin_upload_image(
+    request: Request,
     file: UploadFile = File(...),
     x_admin_password: Optional[str] = Header(None),
 ):
     await verify_admin(x_admin_password)
+
+    # Defense-in-depth: reject oversized uploads before reading them into memory.
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > MAX_UPLOAD_BYTES + 8192:
+        raise HTTPException(400, f"Ukuran file maksimal 5MB")
 
     content_type = (file.content_type or "").lower()
     if content_type not in ALLOWED_IMAGE_TYPES:
