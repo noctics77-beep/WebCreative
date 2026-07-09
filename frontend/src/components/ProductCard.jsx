@@ -1,4 +1,6 @@
 import { formatIDR, resolveImageUrl } from "@/lib/api";
+import { highlightMatch } from "@/components/SearchBar";
+import StockBadge from "@/components/StockBadge";
 import { ShoppingBag, Bell, Flame, Zap, Sparkles, Tag, Hourglass } from "lucide-react";
 
 /**
@@ -61,19 +63,27 @@ function computeBadges(product) {
   return badges;
 }
 
-export default function ProductCard({ product, onOrder, onWaitlist }) {
+export default function ProductCard({ product, onOrder, onWaitlist, query }) {
   const isDraft = product.publish_status === "draft";
   const hasDiscount =
     product.discount_active && product.discount_price && product.discount_price < product.original_price;
   const finalPrice = hasDiscount ? product.discount_price : product.original_price;
-  const available = product.stock_status === "available";
+  const stockOut =
+    !isDraft &&
+    product.stock_limit_enabled &&
+    parseInt(product.stock_quantity || 0, 10) <= 0;
+  const available = product.stock_status === "available" && !stockOut;
   const badges = computeBadges(product);
 
   return (
     <div
       data-testid={`product-card-${product.id}`}
       data-status={isDraft ? "draft" : "published"}
-      className="glass hover-card-lift rounded-2xl overflow-hidden flex flex-col relative"
+      onClick={() => {
+        if (isDraft) onWaitlist && onWaitlist(product);
+        else onOrder && onOrder(product);
+      }}
+      className="glass hover-card-lift rounded-2xl overflow-hidden flex flex-col relative cursor-pointer"
     >
       <div className="relative aspect-[4/3] overflow-hidden bg-[#0a0c12]">
         <img
@@ -113,7 +123,9 @@ export default function ProductCard({ product, onOrder, onWaitlist }) {
       </div>
 
       <div className="p-5 flex flex-col flex-1">
-        <h3 className="font-display text-lg text-white">{product.name}</h3>
+        <h3 className="font-display text-lg text-white">
+          {query ? highlightMatch(product.name, query) : product.name}
+        </h3>
         {!isDraft && product.monthly_sold > 0 && (
           <div
             data-testid={`monthly-sold-${product.id}`}
@@ -122,8 +134,9 @@ export default function ProductCard({ product, onOrder, onWaitlist }) {
             🔥 {product.monthly_sold} terjual bulan ini
           </div>
         )}
+        {!isDraft && <div className="mt-1"><StockBadge product={product} /></div>}
         <p className="text-sm text-white/55 mt-1 line-clamp-2 flex-1">
-          {product.description}
+          {query ? highlightMatch(product.description, query) : product.description}
         </p>
         <div className="mt-4 flex items-end justify-between">
           <div>
@@ -147,7 +160,7 @@ export default function ProductCard({ product, onOrder, onWaitlist }) {
           {isDraft ? (
             <button
               data-testid={`notify-me-btn-${product.id}`}
-              onClick={() => onWaitlist && onWaitlist(product)}
+              onClick={(e) => { e.stopPropagation(); onWaitlist && onWaitlist(product); }}
               className="inline-flex items-center gap-2 bg-white/10 hover:bg-white/20 border border-white/20 text-white/90 text-sm font-medium px-4 py-2 rounded-full transition-colors"
             >
               <Bell size={15} /> Beritahu Saya
@@ -156,10 +169,10 @@ export default function ProductCard({ product, onOrder, onWaitlist }) {
             <button
               data-testid={`order-now-btn-${product.id}`}
               disabled={!available}
-              onClick={() => onOrder(product)}
+              onClick={(e) => { e.stopPropagation(); onOrder(product); }}
               className="inline-flex items-center gap-2 bg-[#F5A623] disabled:bg-white/10 disabled:text-white/40 hover:bg-[#d98f1a] text-[#0f1117] text-sm font-semibold px-4 py-2 rounded-full transition-colors"
             >
-              <ShoppingBag size={15} /> Pesan
+              <ShoppingBag size={15} /> {stockOut ? "Stok Habis" : "Pesan"}
             </button>
           )}
         </div>

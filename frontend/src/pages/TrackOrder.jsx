@@ -1,9 +1,11 @@
 import { useState } from "react";
-import { Search, Loader2, PackageCheck, Clock, XCircle, CheckCircle2, AlertCircle } from "lucide-react";
+import { Search, Loader2, PackageCheck, Clock, XCircle, CheckCircle2, AlertCircle, Star } from "lucide-react";
 import { api, formatIDR } from "@/lib/api";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import ReviewFormModal from "@/components/ReviewFormModal";
+import { toast } from "sonner";
 
 const STATUS_META = {
   pending: { label: "Menunggu Pembayaran", icon: Clock, cls: "text-amber-300 border-amber-500/30 bg-amber-500/10" },
@@ -32,6 +34,22 @@ export default function TrackOrder() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [results, setResults] = useState(null);
+  const [reviewEligibility, setReviewEligibility] = useState(null);
+  const [showReview, setShowReview] = useState(false);
+
+  const openReview = async (orderCode) => {
+    try {
+      const r = await api.get(`/orders/${orderCode}/review-eligibility`);
+      if (!r.data.eligible) {
+        toast.error(r.data.reason || "Belum bisa memberikan ulasan");
+        return;
+      }
+      setReviewEligibility(r.data);
+      setShowReview(true);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Gagal cek eligibility");
+    }
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -185,10 +203,29 @@ export default function TrackOrder() {
                   Selesaikan pembayaran agar pesanan diproses.
                 </div>
               )}
+              {o.status === "confirmed" && (
+                <div className="mt-3 flex justify-end">
+                  <Button
+                    data-testid={`btn-review-${o.order_code}`}
+                    onClick={() => openReview(o.order_code)}
+                    size="sm"
+                    className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold h-8"
+                  >
+                    <Star size={13} className="mr-1" /> Beri Ulasan
+                  </Button>
+                </div>
+              )}
             </div>
           ))}
         </div>
       )}
+
+      <ReviewFormModal
+        open={showReview}
+        eligibility={reviewEligibility}
+        onClose={() => setShowReview(false)}
+        onSuccess={() => {}}
+      />
     </div>
   );
 }

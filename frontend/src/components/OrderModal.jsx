@@ -602,6 +602,29 @@ export default function OrderModal({ open, onClose, product, referral }) {
                 Mohon tunggu konfirmasi admin via <b>WhatsApp / Telegram</b>.
               </p>
             )}
+
+            {/* Ajakan ringan jadi affiliate */}
+            <div
+              data-testid="referral-cta-card"
+              className="mt-5 mx-auto max-w-sm bg-[#F5A623]/8 border border-[#F5A623]/30 rounded-xl p-4 text-left"
+            >
+              <div className="flex items-start gap-3">
+                <div className="text-2xl leading-none">💝</div>
+                <div className="flex-1">
+                  <div className="font-display text-sm text-white">Suka produk CreativeStore?</div>
+                  <p className="text-xs text-white/65 mt-1 leading-relaxed">
+                    Ajak teman kamu dan dapatkan komisi <b className="text-[#F5A623]">10-15%</b> untuk setiap pembelian!
+                  </p>
+                  <a
+                    href="/partnership"
+                    className="inline-flex items-center gap-1 mt-2 text-xs font-semibold text-[#F5A623] hover:text-[#d98f1a]"
+                  >
+                    Daftar sebagai Affiliate sekarang →
+                  </a>
+                </div>
+              </div>
+            </div>
+
             <Button
               onClick={() => handleClose(false)}
               data-testid="close-order-success-btn"

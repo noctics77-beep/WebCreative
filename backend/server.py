@@ -179,6 +179,9 @@ class Product(BaseModel):
     category: str = "lainnya"  # slug kategori
     is_bestseller: bool = False  # badge TERLARIS (manual)
     is_promo: bool = False  # badge PROMO (manual)
+    stock_limit_enabled: bool = False  # jika True, gunakan stock_quantity
+    stock_quantity: int = 0  # sisa slot (relevan hanya jika stock_limit_enabled)
+    slug: str = ""  # slug untuk URL /produk/[slug]
     created_at: str = Field(default_factory=now_iso)
 
 
@@ -196,6 +199,8 @@ class ProductCreate(BaseModel):
     category: str = "lainnya"
     is_bestseller: bool = False
     is_promo: bool = False
+    stock_limit_enabled: bool = False
+    stock_quantity: int = 0
 
 
 class Category(BaseModel):
@@ -243,6 +248,74 @@ class BulkPublishPayload(BaseModel):
 
 class ProductStatusUpdate(BaseModel):
     publish_status: str  # published | draft
+
+
+# ---------- Review Model ----------
+class Review(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    product_id: str
+    product_name: str
+    buyer_name: str  # akan disamarkan saat publik
+    order_id: str
+    rating: int = 5  # 1-5
+    comment: str = ""
+    visible: bool = True
+    created_at: str = Field(default_factory=now_iso)
+
+
+class ReviewCreate(BaseModel):
+    order_id: str
+    rating: int
+    comment: Optional[str] = ""
+
+
+class ReviewAdminUpdate(BaseModel):
+    rating: Optional[int] = None
+    comment: Optional[str] = None
+    visible: Optional[bool] = None
+
+
+# ---------- FAQ Model ----------
+class FAQ(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    question: str
+    answer: str
+    order: int = 100
+    visible: bool = True
+    created_at: str = Field(default_factory=now_iso)
+
+
+class FAQCreate(BaseModel):
+    question: str
+    answer: str
+    order: int = 100
+    visible: bool = True
+
+
+# ---------- About Us content (single-doc) ----------
+DEFAULT_ABOUT = {
+    "id": "about",
+    "tagline": "Digital goods tanpa ribet, instan dan terpercaya",
+    "paragraphs": [
+        "CreativeStore hadir untuk memudahkan Sobat Creative mendapatkan akses ke tools dan layanan digital premium dengan harga terjangkau dan proses yang cepat.",
+        "Kami menyediakan berbagai produk digital mulai dari AI tools, subscription premium, VPN, hingga layanan kreatif — semuanya bisa didapatkan dengan mudah dan aman.",
+        "Bergabunglah dengan ribuan Sobat Creative yang sudah mempercayai CreativeStore sebagai partner digital mereka.",
+    ],
+    "features": [
+        {"icon": "zap", "title": "Proses Cepat", "desc": "Pesanan diproses 1x24 jam"},
+        {"icon": "shield", "title": "Aman & Terpercaya", "desc": "Pembayaran via QRIS resmi"},
+        {"icon": "tag", "title": "Harga Terjangkau", "desc": "Produk premium harga bersahabat"},
+        {"icon": "message-circle", "title": "Support Responsif", "desc": "Tim siap bantu kapanpun"},
+    ],
+}
+
+
+class AboutUpdate(BaseModel):
+    tagline: str
+    paragraphs: List[str]
+    features: List[dict]
 
 
 
@@ -370,6 +443,12 @@ DEFAULT_STATS = {
     "qris_url": "",
     "bank_accounts": [],
     "show_coming_soon": True,
+    # Trust badges (editable via admin settings)
+    "trust_rating": "5.0",
+    "trust_transactions": "5000+",
+    "trust_since_year": "2021",
+    "trust_process_time": "1x24 Jam",
+    "footer_start_year": "2021",
 }
 
 
@@ -392,6 +471,11 @@ class StatsUpdate(BaseModel):
     qris_url: str = ""
     bank_accounts: List[dict] = []
     show_coming_soon: bool = True
+    trust_rating: str = "5.0"
+    trust_transactions: str = "5000+"
+    trust_since_year: str = "2021"
+    trust_process_time: str = "1x24 Jam"
+    footer_start_year: str = "2021"
 
 
 @api_router.put("/admin/stats")
@@ -412,6 +496,9 @@ async def create_order(payload: OrderCreate):
         raise HTTPException(400, "Produk belum tersedia (Coming Soon)")
     if product.get("stock_status") != "available":
         raise HTTPException(400, "Produk sedang tidak tersedia")
+    # Cek stok terbatas
+    if product.get("stock_limit_enabled") and int(product.get("stock_quantity", 0)) <= 0:
+        raise HTTPException(400, "Stok habis")
 
     price = (
         product["discount_price"]
@@ -678,10 +765,37 @@ async def admin_change_password(payload: ChangePassword, x_admin_password: Optio
     return {"ok": True}
 
 
+import re
+def _slugify(name: str) -> str:
+    """Convert product name → URL slug. Handle diacritics minimally."""
+    s = (name or "").lower().strip()
+    s = re.sub(r"[^a-z0-9\s-]", "", s)
+    s = re.sub(r"[\s_-]+", "-", s)
+    s = s.strip("-")
+    return s or "produk"
+
+
+async def _generate_unique_slug(name: str, ignore_id: Optional[str] = None) -> str:
+    base = _slugify(name)
+    slug = base
+    idx = 2
+    while True:
+        q = {"slug": slug}
+        if ignore_id:
+            q["id"] = {"$ne": ignore_id}
+        exist = await db.products.find_one(q, {"_id": 0, "id": 1})
+        if not exist:
+            return slug
+        slug = f"{base}-{idx}"
+        idx += 1
+
+
 @api_router.post("/admin/products")
 async def admin_create_product(payload: ProductCreate, x_admin_password: Optional[str] = Header(None)):
     await verify_admin(x_admin_password)
-    p = Product(**payload.model_dump())
+    data = payload.model_dump()
+    data["slug"] = await _generate_unique_slug(data["name"])
+    p = Product(**data)
     await db.products.insert_one(p.model_dump())
     return p.model_dump()
 
@@ -743,7 +857,13 @@ async def admin_update_product(product_id: str, payload: ProductCreate, x_admin_
     old = await db.products.find_one({"id": product_id}, {"_id": 0})
     if not old:
         raise HTTPException(404, "Produk tidak ditemukan")
-    await db.products.update_one({"id": product_id}, {"$set": payload.model_dump()})
+    data = payload.model_dump()
+    # Regenerate slug jika nama berubah
+    if data["name"] != old.get("name") or not old.get("slug"):
+        data["slug"] = await _generate_unique_slug(data["name"], ignore_id=product_id)
+    else:
+        data["slug"] = old.get("slug", "")
+    await db.products.update_one({"id": product_id}, {"$set": data})
     p = await db.products.find_one({"id": product_id}, {"_id": 0})
 
     # Deteksi transisi Draft -> Published → trigger notifikasi waitlist
@@ -838,17 +958,27 @@ async def admin_update_order_status(order_id: str, payload: StatusUpdate, x_admi
 
     await db.orders.update_one({"id": order_id}, {"$set": {"status": payload.status}})
 
-    # If confirmed and has referral, add commission to affiliate
-    if payload.status == "confirmed" and order.get("referral_affiliate_code") and order.get("commission_amount", 0) > 0:
-        await db.affiliates.update_one(
-            {"affiliate_code": order["referral_affiliate_code"]},
-            {
-                "$inc": {
-                    "balance": order["commission_amount"],
-                    "total_earned": order["commission_amount"],
-                }
-            },
-        )
+    # If confirmed: decrement stock (kalau stock_limit_enabled) & add commission
+    if payload.status == "confirmed":
+        prod = await db.products.find_one({"id": order.get("product_id")}, {"_id": 0})
+        if prod and prod.get("stock_limit_enabled"):
+            new_qty = max(0, int(prod.get("stock_quantity", 0)) - 1)
+            update_data = {"stock_quantity": new_qty}
+            if new_qty <= 0:
+                update_data["stock_status"] = "unavailable"
+            await db.products.update_one({"id": prod["id"]}, {"$set": update_data})
+
+        # Referral commission
+        if order.get("referral_affiliate_code") and order.get("commission_amount", 0) > 0:
+            await db.affiliates.update_one(
+                {"affiliate_code": order["referral_affiliate_code"]},
+                {
+                    "$inc": {
+                        "balance": order["commission_amount"],
+                        "total_earned": order["commission_amount"],
+                    }
+                },
+            )
 
     return {"ok": True}
 
@@ -1976,8 +2106,200 @@ async def admin_integration_status(x_admin_password: Optional[str] = Header(None
     }
 
 
-app.include_router(api_router)
+# =============================================================================
+# PRODUCT DETAIL: get by slug + get order for review eligibility
+# =============================================================================
 
+@api_router.get("/products/slug/{slug}")
+async def get_product_by_slug(slug: str):
+    p = await db.products.find_one({"slug": slug}, {"_id": 0})
+    if not p:
+        # fallback: try find by id (backward compat)
+        p = await db.products.find_one({"id": slug}, {"_id": 0})
+        if not p:
+            raise HTTPException(404, "Produk tidak ditemukan")
+    return p
+
+
+# =============================================================================
+# REVIEWS ENDPOINTS
+# =============================================================================
+
+def _mask_name(name: str) -> str:
+    """Riz*** style masking. Keep first 3 chars, mask rest."""
+    if not name:
+        return "Anonim"
+    name = name.strip()
+    if len(name) <= 3:
+        return name + "***"
+    return name[:3] + "***"
+
+
+@api_router.get("/reviews")
+async def list_reviews_public(product_id: Optional[str] = Query(None)):
+    q = {"visible": True}
+    if product_id:
+        q["product_id"] = product_id
+    items = await db.reviews.find(q, {"_id": 0}).sort("created_at", -1).to_list(500)
+    for it in items:
+        it["buyer_name_masked"] = _mask_name(it.get("buyer_name", ""))
+    return items
+
+
+@api_router.get("/reviews/summary")
+async def reviews_summary(product_id: str):
+    """Rata-rata rating dan jumlah review per produk."""
+    pipeline = [
+        {"$match": {"product_id": product_id, "visible": True}},
+        {"$group": {"_id": "$product_id", "avg": {"$avg": "$rating"}, "count": {"$sum": 1}}},
+    ]
+    result = await db.reviews.aggregate(pipeline).to_list(1)
+    if not result:
+        return {"avg_rating": 0, "count": 0}
+    return {"avg_rating": round(result[0]["avg"], 1), "count": result[0]["count"]}
+
+
+@api_router.get("/orders/{order_code}/review-eligibility")
+async def review_eligibility(order_code: str):
+    """Check apakah order sudah selesai + belum ada review."""
+    order = await db.orders.find_one({"order_code": order_code}, {"_id": 0})
+    if not order:
+        raise HTTPException(404, "Order tidak ditemukan")
+    if order.get("status") != "confirmed":
+        return {"eligible": False, "reason": "Order belum selesai"}
+    existing = await db.reviews.find_one({"order_id": order["id"]}, {"_id": 0})
+    if existing:
+        return {"eligible": False, "reason": "Ulasan sudah diberikan", "existing": True}
+    return {
+        "eligible": True,
+        "order_id": order["id"],
+        "product_id": order["product_id"],
+        "product_name": order["product_name"],
+        "buyer_name": order["buyer_name"],
+    }
+
+
+@api_router.post("/reviews")
+async def submit_review(payload: ReviewCreate):
+    """Public endpoint: pembeli submit ulasan."""
+    order = await db.orders.find_one({"id": payload.order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(404, "Order tidak ditemukan")
+    if order.get("status") != "confirmed":
+        raise HTTPException(400, "Ulasan hanya bisa diberikan untuk pesanan yang sudah Selesai")
+    existing = await db.reviews.find_one({"order_id": payload.order_id}, {"_id": 0})
+    if existing:
+        raise HTTPException(400, "Ulasan untuk order ini sudah pernah diberikan")
+    rating = max(1, min(5, int(payload.rating)))
+    r = Review(
+        product_id=order["product_id"],
+        product_name=order["product_name"],
+        buyer_name=order["buyer_name"],
+        order_id=order["id"],
+        rating=rating,
+        comment=(payload.comment or "").strip()[:1000],
+        visible=True,
+    )
+    await db.reviews.insert_one(r.model_dump())
+    return {"ok": True, "message": "Terima kasih ulasannya, Sobat Creative! 💛"}
+
+
+@api_router.get("/admin/reviews")
+async def admin_list_reviews(
+    product_id: Optional[str] = Query(None),
+    rating: Optional[int] = Query(None),
+    visible: Optional[bool] = Query(None),
+    x_admin_password: Optional[str] = Header(None),
+):
+    await verify_admin(x_admin_password)
+    q = {}
+    if product_id:
+        q["product_id"] = product_id
+    if rating:
+        q["rating"] = rating
+    if visible is not None:
+        q["visible"] = visible
+    return await db.reviews.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
+
+
+@api_router.patch("/admin/reviews/{review_id}")
+async def admin_update_review(review_id: str, payload: ReviewAdminUpdate, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    update = {k: v for k, v in payload.model_dump().items() if v is not None}
+    r = await db.reviews.update_one({"id": review_id}, {"$set": update})
+    if r.matched_count == 0:
+        raise HTTPException(404, "Ulasan tidak ditemukan")
+    return await db.reviews.find_one({"id": review_id}, {"_id": 0})
+
+
+@api_router.delete("/admin/reviews/{review_id}")
+async def admin_delete_review(review_id: str, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    r = await db.reviews.delete_one({"id": review_id})
+    return {"deleted": r.deleted_count}
+
+
+# =============================================================================
+# FAQ ENDPOINTS
+# =============================================================================
+
+@api_router.get("/faqs")
+async def list_faqs():
+    return await db.faqs.find({"visible": True}, {"_id": 0}).sort("order", 1).to_list(200)
+
+
+@api_router.get("/admin/faqs")
+async def admin_list_faqs(x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    return await db.faqs.find({}, {"_id": 0}).sort("order", 1).to_list(500)
+
+
+@api_router.post("/admin/faqs")
+async def admin_create_faq(payload: FAQCreate, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    f = FAQ(**payload.model_dump())
+    await db.faqs.insert_one(f.model_dump())
+    return f.model_dump()
+
+
+@api_router.put("/admin/faqs/{faq_id}")
+async def admin_update_faq(faq_id: str, payload: FAQCreate, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    r = await db.faqs.update_one({"id": faq_id}, {"$set": payload.model_dump()})
+    if r.matched_count == 0:
+        raise HTTPException(404, "FAQ tidak ditemukan")
+    return await db.faqs.find_one({"id": faq_id}, {"_id": 0})
+
+
+@api_router.delete("/admin/faqs/{faq_id}")
+async def admin_delete_faq(faq_id: str, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    r = await db.faqs.delete_one({"id": faq_id})
+    return {"deleted": r.deleted_count}
+
+
+# =============================================================================
+# ABOUT US ENDPOINT
+# =============================================================================
+
+@api_router.get("/about")
+async def get_about():
+    doc = await db.about.find_one({"id": "about"}, {"_id": 0})
+    if not doc:
+        # return default
+        return DEFAULT_ABOUT
+    return doc
+
+
+@api_router.put("/admin/about")
+async def admin_update_about(payload: AboutUpdate, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    data = {"id": "about", **payload.model_dump()}
+    await db.about.update_one({"id": "about"}, {"$set": data}, upsert=True)
+    return data
+
+
+app.include_router(api_router)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -2027,6 +2349,44 @@ async def _start_scheduler():
             logger.info(f"Seeded {len(docs)} default categories")
     except Exception as e:
         logger.error(f"Category seed error: {e}")
+
+    # Seed FAQ default kalau kosong
+    try:
+        faq_count = await db.faqs.count_documents({})
+        if faq_count == 0:
+            default_faqs = [
+                {"question": "Bagaimana cara order?", "answer": "Pilih produk yang kamu inginkan, klik \"Pesan Sekarang\", isi nama dan kontak WA/Telegram, pilih metode pembayaran, lalu ikuti instruksi pembayaran. Tim kami akan memproses pesanan dalam 1x24 jam hari kerja.", "order": 1},
+                {"question": "Metode pembayaran apa saja yang tersedia?", "answer": "Kami menerima QRIS (otomatis via Pakasir) dan Transfer Bank. Semua metode bisa dipilih saat checkout.", "order": 2},
+                {"question": "Berapa lama pesanan diproses?", "answer": "Pesanan diproses dalam 1x24 jam hari kerja setelah pembayaran dikonfirmasi. Produk akan dikirim via WhatsApp atau Telegram sesuai kontak yang kamu berikan.", "order": 3},
+                {"question": "Apakah ada program affiliate?", "answer": "Ya! Kamu bisa bergabung sebagai Partner Affiliate dan dapatkan komisi 10-15% untuk setiap penjualan dari link referral kamu. Daftar di halaman Partnership.", "order": 4},
+                {"question": "Bagaimana jika ada kendala setelah pembelian?", "answer": "Hubungi kami langsung via WhatsApp atau Telegram yang tertera di website. Tim kami siap membantu Sobat Creative!", "order": 5},
+            ]
+            docs = [FAQ(**f).model_dump() for f in default_faqs]
+            await db.faqs.insert_many(docs)
+            logger.info(f"Seeded {len(docs)} default FAQs")
+    except Exception as e:
+        logger.error(f"FAQ seed error: {e}")
+
+    # Migrasi produk lama: pastikan punya slug
+    try:
+        cursor = db.products.find({"$or": [{"slug": {"$exists": False}}, {"slug": ""}]}, {"_id": 0, "id": 1, "name": 1})
+        old_products = await cursor.to_list(1000)
+        for p in old_products:
+            new_slug = await _generate_unique_slug(p.get("name", "produk"), ignore_id=p["id"])
+            await db.products.update_one({"id": p["id"]}, {"$set": {"slug": new_slug}})
+        if old_products:
+            logger.info(f"Migrated {len(old_products)} product slugs")
+    except Exception as e:
+        logger.error(f"Product slug migration error: {e}")
+
+    # Migrasi produk: pastikan punya stock_limit_enabled & stock_quantity
+    try:
+        await db.products.update_many(
+            {"stock_limit_enabled": {"$exists": False}},
+            {"$set": {"stock_limit_enabled": False, "stock_quantity": 0}},
+        )
+    except Exception as e:
+        logger.error(f"Stock migration error: {e}")
 
     try:
         _scheduler = init_scheduler(db, send_telegram)

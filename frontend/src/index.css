@@ -381,3 +381,46 @@ input[type="number"]::-webkit-inner-spin-button {
     transform: translateY(-5px);
     box-shadow: 0 30px 45px -25px rgba(245, 166, 35, 0.4);
 }
+
+/* ============================================================
+ * TRUST BADGES SHIMMER (Trusted Seller highlight)
+ * ============================================================ */
+.trust-badge-shimmer {
+    position: relative;
+    overflow: hidden;
+}
+.trust-badge-shimmer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        rgba(245, 166, 35, 0.15) 45%,
+        rgba(245, 166, 35, 0.35) 50%,
+        rgba(245, 166, 35, 0.15) 55%,
+        transparent 100%
+    );
+    background-size: 200% 100%;
+    background-repeat: no-repeat;
+    animation: trustShimmer 3s linear infinite;
+    pointer-events: none;
+}
+@keyframes trustShimmer {
+    0% {
+        background-position: -100% 0;
+    }
+    100% {
+        background-position: 200% 0;
+    }
+}
+
+/* Hide scrollbar for horizontal-swipe on mobile */
+.no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+    display: none;
+}
+

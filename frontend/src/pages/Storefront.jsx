@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import ProductCard from "@/components/ProductCard";
 import OrderModal from "@/components/OrderModal";
@@ -8,6 +8,8 @@ import TestimonialCarousel from "@/components/TestimonialCarousel";
 import UrgencySection from "@/components/UrgencySection";
 import OnlineCounter from "@/components/OnlineCounter";
 import LiveFeed from "@/components/LiveFeed";
+import SearchBar from "@/components/SearchBar";
+import TrustBadges from "@/components/TrustBadges";
 import {
   Sparkles, ShieldCheck, Zap, Flame, TrendingUp, Clock, ArrowDown,
   Video, Shield, Play, Mail, Grid, LayoutGrid,
@@ -52,8 +54,10 @@ export default function Storefront() {
   const [waitlistProduct, setWaitlistProduct] = useState(null);
   const [activeCategory, setActiveCategory] = useState("all");
   const [sort, setSort] = useState("all");
+  const [query, setQuery] = useState("");
   const [params] = useSearchParams();
   const referral = params.get("ref");
+  const navigate = useNavigate();
 
   useEffect(() => {
     Promise.all([
@@ -67,10 +71,28 @@ export default function Storefront() {
       .finally(() => setLoading(false));
   }, []);
 
+  const catNameMap = useMemo(() => {
+    const m = {};
+    categories.forEach((c) => { m[c.slug] = c.name; });
+    return m;
+  }, [categories]);
+
   const filteredProducts = useMemo(() => {
     let list = [...products];
     if (activeCategory !== "all") {
       list = list.filter((p) => (p.category || "lainnya") === activeCategory);
+    }
+    if (query.trim()) {
+      const q = query.trim().toLowerCase();
+      list = list.filter((p) => {
+        const catName = (catNameMap[p.category] || "").toLowerCase();
+        return (
+          (p.name || "").toLowerCase().includes(q) ||
+          (p.description || "").toLowerCase().includes(q) ||
+          catName.includes(q) ||
+          (p.category || "").toLowerCase().includes(q)
+        );
+      });
     }
     // sort published produk saja untuk badge terlaris/flash sale
     if (sort === "bestseller") {
@@ -94,7 +116,7 @@ export default function Storefront() {
       list.sort((a, b) => priceOf(a) - priceOf(b));
     }
     return list;
-  }, [products, activeCategory, sort]);
+  }, [products, activeCategory, sort, query, catNameMap]);
 
   return (
     <div data-testid="storefront-page">
@@ -137,6 +159,9 @@ export default function Storefront() {
         </div>
       </section>
 
+      {/* TRUST BADGES */}
+      <TrustBadges />
+
       {/* PRODUCT GRID */}
       <section
         id="products"
@@ -152,6 +177,15 @@ export default function Storefront() {
           <div className="hidden md:block text-xs text-white/40 uppercase tracking-[0.25em]">
             {filteredProducts.length} produk
           </div>
+        </div>
+
+        {/* Search Bar */}
+        <div className="mb-4">
+          <SearchBar
+            value={query}
+            onChange={setQuery}
+            placeholder="Cari produk berdasarkan nama, deskripsi, atau kategori..."
+          />
         </div>
 
         {/* Kategori Tabs */}
@@ -217,11 +251,18 @@ export default function Storefront() {
         ) : filteredProducts.length === 0 ? (
           <div
             data-testid="empty-products"
-            className="rounded-2xl border border-dashed border-white/10 p-12 text-center text-white/40"
+            className="rounded-2xl border border-dashed border-white/10 p-12 text-center text-white/60"
           >
-            {products.length === 0
-              ? "Belum ada produk. Tambahkan produk dari panel admin."
-              : "Tidak ada produk untuk filter ini."}
+            {query.trim() ? (
+              <>
+                <div className="text-3xl mb-2">🤔</div>
+                Hmm, produk yang kamu cari belum ada nih Sobat Creative 🎨 Coba kata kunci lain?
+              </>
+            ) : products.length === 0 ? (
+              "Belum ada produk. Tambahkan produk dari panel admin."
+            ) : (
+              "Tidak ada produk untuk filter ini."
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -229,8 +270,9 @@ export default function Storefront() {
               <ProductCard
                 key={p.id}
                 product={p}
-                onOrder={setSelected}
-                onWaitlist={setWaitlistProduct}
+                query={query}
+                onOrder={() => navigate(`/produk/${p.slug || p.id}${referral ? `?ref=${referral}` : ""}`)}
+                onWaitlist={() => navigate(`/produk/${p.slug || p.id}${referral ? `?ref=${referral}` : ""}`)}
               />
             ))}
           </div>

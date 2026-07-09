@@ -11,6 +11,8 @@ const links = [
   { to: "/loyalty", label: "Poin Harian" },
   { to: "/affiliate", label: "Affiliate" },
   { to: "/lacak-pesanan", label: "Lacak Pesanan" },
+  { to: "/faq", label: "FAQ" },
+  { to: "/tentang", label: "Tentang" },
   { to: "/admin", label: "Admin" },
 ];
 

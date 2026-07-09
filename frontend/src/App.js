@@ -13,6 +13,9 @@ import AffiliateDashboard from "@/pages/AffiliateDashboard";
 import AdminPanel from "@/pages/AdminPanel";
 import LoyaltyPage from "@/pages/LoyaltyPage";
 import TrackOrder from "@/pages/TrackOrder";
+import ProductDetail from "@/pages/ProductDetail";
+import FAQ from "@/pages/FAQ";
+import About from "@/pages/About";
 import NavBar from "@/components/NavBar";
 import Footer from "@/components/Footer";
 import ChatWidget from "@/components/ChatWidget";
@@ -38,6 +41,9 @@ export default function App() {
         <NavBar />
         <Routes>
           <Route path="/" element={<Storefront />} />
+          <Route path="/produk/:slug" element={<ProductDetail />} />
+          <Route path="/faq" element={<FAQ />} />
+          <Route path="/tentang" element={<About />} />
           <Route path="/partnership" element={<Partnership />} />
           <Route path="/affiliate" element={<AffiliateDashboard />} />
           <Route path="/admin" element={<AdminPanel />} />
