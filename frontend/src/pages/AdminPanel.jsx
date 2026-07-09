@@ -168,6 +168,7 @@ function ProductsTab({ api }) {
   const [items, setItems] = useState([]);
   const [editing, setEditing] = useState(null);
   const [open, setOpen] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
 
   const load = () => api.get("/products").then((r) => setItems(r.data));
   useEffect(() => { load(); }, []);
@@ -179,17 +180,38 @@ function ProductsTab({ api }) {
     load();
   };
 
+  const incompleteCount = items.filter(
+    (p) => !p.photo_url || !p.original_price || p.original_price <= 0
+  ).length;
+
   return (
     <div className="glass rounded-2xl p-6">
-      <div className="flex items-center justify-between mb-4">
-        <h3 className="font-display text-lg">Daftar Produk ({items.length})</h3>
-        <Button
-          data-testid="add-product-btn"
-          onClick={() => { setEditing(null); setOpen(true); }}
-          className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold"
-        >
-          <Plus size={15} className="mr-1" /> Tambah Produk
-        </Button>
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <div>
+          <h3 className="font-display text-lg">Daftar Produk ({items.length})</h3>
+          {incompleteCount > 0 && (
+            <p data-testid="incomplete-count" className="text-xs text-amber-300/80 mt-1">
+              ⚠️ {incompleteCount} produk belum lengkap (foto/harga kosong)
+            </p>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <Button
+            data-testid="bulk-import-btn"
+            variant="outline"
+            onClick={() => setBulkOpen(true)}
+            className="bg-transparent border-[#F5A623]/40 hover:bg-[#F5A623]/10 text-[#F5A623]"
+          >
+            <Upload size={15} className="mr-1" /> Import Massal
+          </Button>
+          <Button
+            data-testid="add-product-btn"
+            onClick={() => { setEditing(null); setOpen(true); }}
+            className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold"
+          >
+            <Plus size={15} className="mr-1" /> Tambah Produk
+          </Button>
+        </div>
       </div>
 
       <Table>
@@ -206,13 +228,30 @@ function ProductsTab({ api }) {
         <TableBody>
           {items.map((p) => {
             const has = p.discount_active && p.discount_price;
+            const incomplete = !p.photo_url || !p.original_price || p.original_price <= 0;
             return (
               <TableRow key={p.id} className="border-white/5" data-testid={`product-row-${p.id}`}>
                 <TableCell>
                   <div className="flex items-center gap-3">
-                    <img src={resolveImageUrl(p.photo_url)} alt="" className="w-10 h-10 rounded-md object-cover" />
+                    {p.photo_url ? (
+                      <img src={resolveImageUrl(p.photo_url)} alt="" className="w-10 h-10 rounded-md object-cover" />
+                    ) : (
+                      <div className="w-10 h-10 rounded-md bg-white/5 border border-dashed border-white/15 flex items-center justify-center text-white/30">
+                        <ImageIcon size={14} />
+                      </div>
+                    )}
                     <div>
-                      <div className="text-sm font-medium">{p.name}</div>
+                      <div className="text-sm font-medium flex items-center gap-2">
+                        {p.name}
+                        {incomplete && (
+                          <span
+                            data-testid={`incomplete-badge-${p.id}`}
+                            className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30"
+                          >
+                            Belum Lengkap
+                          </span>
+                        )}
+                      </div>
                       <div className="text-xs text-white/40 line-clamp-1 max-w-xs">{p.description}</div>
                     </div>
                   </div>
@@ -267,6 +306,15 @@ function ProductsTab({ api }) {
           editing={editing}
           api={api}
           onSaved={() => { setOpen(false); load(); }}
+        />
+      )}
+
+      {bulkOpen && (
+        <BulkImportDialog
+          open={bulkOpen}
+          onOpenChange={setBulkOpen}
+          api={api}
+          onImported={() => { setBulkOpen(false); load(); }}
         />
       )}
     </div>
@@ -394,6 +442,168 @@ function ProductFormDialog({ open, onOpenChange, editing, api, onSaved }) {
     </Dialog>
   );
 }
+
+
+// ---------- Bulk Import Dialog ----------
+const BULK_PREFIX_REGEX = /^(\s*(?:➥|→|>|[-*•]|\d+[.)])\s*)+/u;
+
+function parseBulkInput(raw) {
+  return raw
+    .split(/\r?\n/)
+    .map((line) => line.replace(BULK_PREFIX_REGEX, "").trim())
+    .filter(Boolean);
+}
+
+function BulkImportDialog({ open, onOpenChange, api, onImported }) {
+  const [raw, setRaw] = useState("");
+  const [preview, setPreview] = useState([]);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    const parsed = parseBulkInput(raw);
+    const seen = new Set();
+    const unique = [];
+    for (const name of parsed) {
+      const k = name.toLowerCase();
+      if (!seen.has(k)) {
+        seen.add(k);
+        unique.push(name);
+      }
+    }
+    setPreview(unique);
+  }, [raw]);
+
+  const removeItem = (idx) => setPreview((prev) => prev.filter((_, i) => i !== idx));
+
+  const submit = async () => {
+    if (preview.length === 0) {
+      toast.error("Belum ada nama produk untuk diimpor");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await api.post("/admin/products/bulk-import", { names: preview });
+      toast.success(`${res.data.created} produk berhasil ditambahkan`);
+      setRaw("");
+      onImported();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Import gagal");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        data-testid="bulk-import-dialog"
+        className="bg-[#1a1d27] border-white/10 text-white max-w-2xl max-h-[90vh] flex flex-col"
+      >
+        <DialogHeader>
+          <DialogTitle className="font-display text-xl">Import Produk Massal</DialogTitle>
+          <p className="text-xs text-white/55">
+            Tempel daftar nama produk (satu per baris). Prefix seperti{" "}
+            <code className="text-[#F5A623]">➥</code>, <code className="text-[#F5A623]">-</code>,{" "}
+            <code className="text-[#F5A623]">1.</code> akan otomatis dibersihkan. Duplikat diabaikan.
+          </p>
+        </DialogHeader>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2 min-h-0 flex-1 overflow-hidden">
+          <div className="flex flex-col min-h-0">
+            <Label className="text-[11px] uppercase tracking-widest text-white/60 mb-1">
+              Daftar Nama Produk
+            </Label>
+            <Textarea
+              data-testid="bulk-input-textarea"
+              value={raw}
+              onChange={(e) => setRaw(e.target.value)}
+              placeholder={"➥ Netflix Premium 1 Bulan\n- Spotify Family\n1. Canva Pro\nDisney+ Hotstar"}
+              className="flex-1 min-h-[240px] bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623] font-mono text-xs resize-none"
+            />
+          </div>
+
+          <div className="flex flex-col min-h-0">
+            <div className="flex items-center justify-between mb-1">
+              <Label className="text-[11px] uppercase tracking-widest text-white/60">
+                Preview ({preview.length})
+              </Label>
+              {preview.length > 0 && (
+                <button
+                  type="button"
+                  data-testid="bulk-clear-preview"
+                  onClick={() => setRaw("")}
+                  className="text-[10px] text-white/50 hover:text-red-300"
+                >
+                  Bersihkan
+                </button>
+              )}
+            </div>
+            <div
+              data-testid="bulk-preview-list"
+              className="flex-1 min-h-[240px] max-h-[240px] overflow-y-auto rounded-md border border-white/10 bg-[#0f1117] p-1"
+            >
+              {preview.length === 0 ? (
+                <p className="text-xs text-white/40 text-center py-8 px-3">
+                  Belum ada produk. Ketik atau tempel daftar di sebelah kiri.
+                </p>
+              ) : (
+                <ul className="space-y-1">
+                  {preview.map((name, idx) => (
+                    <li
+                      key={`${idx}-${name}`}
+                      data-testid={`bulk-preview-item-${idx}`}
+                      className="flex items-center justify-between gap-2 px-2 py-1.5 rounded bg-[#1a1d27] border border-white/5 hover:border-[#F5A623]/30"
+                    >
+                      <span className="text-xs text-white/85 truncate">{name}</span>
+                      <button
+                        type="button"
+                        data-testid={`bulk-remove-item-${idx}`}
+                        onClick={() => removeItem(idx)}
+                        className="p-1 rounded hover:bg-red-500/15 text-white/40 hover:text-red-300"
+                        title="Hapus"
+                      >
+                        <X size={12} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <p className="text-[10px] text-white/40 mt-1.5 leading-relaxed">
+              Default tiap produk: harga 0, foto kosong, deskripsi kosong, komisi 10%, status tersedia.
+              Lengkapi via <b className="text-white/70">Edit Produk</b> setelah import.
+            </p>
+          </div>
+        </div>
+
+        <DialogFooter className="mt-3 gap-2">
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            className="bg-transparent border-white/20 hover:bg-white/5 text-white"
+          >
+            Batal
+          </Button>
+          <Button
+            data-testid="bulk-import-submit"
+            onClick={submit}
+            disabled={busy || preview.length === 0}
+            className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold"
+          >
+            {busy ? (
+              <Loader2 className="animate-spin" size={14} />
+            ) : (
+              <>
+                <Plus size={14} className="mr-1" /> Import {preview.length} Produk
+              </>
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 
 const Field = ({ label, children }) => (
   <div>

@@ -552,6 +552,55 @@ async def admin_create_product(payload: ProductCreate, x_admin_password: Optiona
     return p.model_dump()
 
 
+class BulkImportPayload(BaseModel):
+    names: List[str]
+
+
+@api_router.post("/admin/products/bulk-import")
+async def admin_bulk_import_products(
+    payload: BulkImportPayload,
+    x_admin_password: Optional[str] = Header(None),
+):
+    await verify_admin(x_admin_password)
+    # Sanitize and deduplicate while preserving order
+    seen: set = set()
+    cleaned: list = []
+    for raw in payload.names:
+        if not raw:
+            continue
+        name = raw.strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(name)
+
+    if not cleaned:
+        raise HTTPException(400, "Tidak ada nama produk valid")
+
+    docs = [
+        Product(
+            name=n,
+            photo_url="",
+            original_price=0,
+            discount_price=None,
+            discount_active=False,
+            description="",
+            commission_percent=10.0,
+            stock_status="available",
+            monthly_sold=0,
+        ).model_dump()
+        for n in cleaned
+    ]
+    await db.products.insert_many(docs)
+    # insert_many mutates docs to add ObjectId _id — strip before returning
+    for d in docs:
+        d.pop("_id", None)
+    return {"created": len(docs), "products": docs}
+
+
 @api_router.put("/admin/products/{product_id}")
 async def admin_update_product(product_id: str, payload: ProductCreate, x_admin_password: Optional[str] = Header(None)):
     await verify_admin(x_admin_password)
