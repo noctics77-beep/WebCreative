@@ -311,3 +311,70 @@ def media_type(fmt: str) -> str:
         if fmt == "xlsx"
         else "text/csv; charset=utf-8"
     )
+
+
+
+# ---------- WAITLIST EXPORT ----------
+from fastapi import Response
+
+WAITLIST_COLUMNS = [
+    ("Tanggal Daftar", "created_at"),
+    ("Produk", "produk_nama"),
+    ("Nama", "nama"),
+    ("WA/Telegram", "whatsapp_telegram"),
+    ("Email", "email"),
+    ("Status Notif", "notified_label"),
+    ("Via", "notified_via"),
+]
+
+
+def _norm_waitlist_row(w: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "created_at": fmt_date(w.get("created_at")),
+        "produk_nama": w.get("produk_nama") or "-",
+        "nama": w.get("nama") or "-",
+        "whatsapp_telegram": w.get("whatsapp_telegram") or "-",
+        "email": w.get("email") or "-",
+        "notified_label": "Terkirim" if w.get("notified") else "Pending",
+        "notified_via": w.get("notified_via") or "-",
+    }
+
+
+def waitlist_to_csv(items: Iterable[Dict[str, Any]]) -> bytes:
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow([c[0] for c in WAITLIST_COLUMNS])
+    for it in items:
+        row = _norm_waitlist_row(it)
+        w.writerow([row[k] for _, k in WAITLIST_COLUMNS])
+    return buf.getvalue().encode("utf-8-sig")
+
+
+def waitlist_to_xlsx(items: Iterable[Dict[str, Any]]) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Waitlist"
+    _write_headers(ws, [c[0] for c in WAITLIST_COLUMNS])
+    for it in items:
+        row = _norm_waitlist_row(it)
+        ws.append([row[k] for _, k in WAITLIST_COLUMNS])
+    _autosize(ws)
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
+
+
+def export_waitlist(items: List[Dict[str, Any]], fmt: str):
+    """FastAPI Response helper untuk export waitlist."""
+    ts = datetime.now().strftime("%Y%m%d_%H%M")
+    if fmt == "csv":
+        data = waitlist_to_csv(items)
+        filename = f"waitlist_{ts}.csv"
+    else:
+        data = waitlist_to_xlsx(items)
+        filename = f"waitlist_{ts}.xlsx"
+    return Response(
+        content=data,
+        media_type=media_type(fmt),
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

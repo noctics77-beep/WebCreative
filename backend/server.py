@@ -28,9 +28,25 @@ db = client[os.environ["DB_NAME"]]
 ADMIN_PASSWORD = os.environ["ADMIN_PASSWORD"]
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+TELEGRAM_PUBLIC_BOT_TOKEN = os.environ.get("TELEGRAM_PUBLIC_BOT_TOKEN", "")
+TELEGRAM_PUBLIC_BOT_USERNAME = os.environ.get("TELEGRAM_PUBLIC_BOT_USERNAME", "[USERNAME_BOT_PUBLIK]")
+RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+RESEND_FROM_EMAIL = os.environ.get("RESEND_FROM_EMAIL", "notif@creativestore.my.id")
+PUBLIC_STORE_URL = os.environ.get("PUBLIC_STORE_URL", "https://creativestore.my.id")
 ADMIN_WHATSAPP = os.environ.get("ADMIN_WHATSAPP", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
+
+# Default kategori (di-seed saat startup jika koleksi kosong)
+DEFAULT_CATEGORIES = [
+    {"slug": "ai-tools", "name": "AI Tools", "icon": "sparkles", "order": 1},
+    {"slug": "video-kreatif", "name": "Video & Kreatif", "icon": "video", "order": 2},
+    {"slug": "vpn-keamanan", "name": "VPN & Keamanan", "icon": "shield", "order": 3},
+    {"slug": "produktivitas", "name": "Produktivitas", "icon": "zap", "order": 4},
+    {"slug": "hiburan", "name": "Hiburan", "icon": "play", "order": 5},
+    {"slug": "email-akun", "name": "Email & Akun", "icon": "mail", "order": 6},
+    {"slug": "lainnya", "name": "Lainnya", "icon": "grid", "order": 99},
+]
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
@@ -67,6 +83,56 @@ async def send_telegram(message: str):
             )
     except Exception as e:
         logger.error(f"Telegram send failed: {e}")
+
+
+async def send_public_telegram(chat_id: str, message: str) -> bool:
+    """Kirim pesan via BOT PUBLIK (TELEGRAM_PUBLIC_BOT_TOKEN) ke chat_id specific user."""
+    if not TELEGRAM_PUBLIC_BOT_TOKEN or not chat_id:
+        return False
+    url = f"https://api.telegram.org/bot{TELEGRAM_PUBLIC_BOT_TOKEN}/sendMessage"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as cli:
+            r = await cli.post(
+                url,
+                json={
+                    "chat_id": chat_id,
+                    "text": message,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": False,
+                },
+            )
+            return r.status_code == 200
+    except Exception as e:
+        logger.error(f"Public telegram send failed: {e}")
+        return False
+
+
+async def send_email_resend(to_email: str, subject: str, html_body: str) -> bool:
+    """Kirim email via Resend API. Return True kalau sukses."""
+    if not RESEND_API_KEY or not to_email:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as cli:
+            r = await cli.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {RESEND_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "from": RESEND_FROM_EMAIL,
+                    "to": [to_email],
+                    "subject": subject,
+                    "html": html_body,
+                },
+            )
+            if r.status_code >= 400:
+                logger.error(f"Resend error {r.status_code}: {r.text}")
+                return False
+            return True
+    except Exception as e:
+        logger.error(f"Resend send failed: {e}")
+        return False
 
 
 def hash_password(password: str) -> str:
@@ -108,6 +174,11 @@ class Product(BaseModel):
     commission_percent: float = 10.0
     stock_status: str = "available"  # available | unavailable
     monthly_sold: int = 0
+    # === FIELD BARU ===
+    publish_status: str = "draft"  # published | draft (default draft untuk produk baru)
+    category: str = "lainnya"  # slug kategori
+    is_bestseller: bool = False  # badge TERLARIS (manual)
+    is_promo: bool = False  # badge PROMO (manual)
     created_at: str = Field(default_factory=now_iso)
 
 
@@ -121,6 +192,58 @@ class ProductCreate(BaseModel):
     commission_percent: float = 10.0
     stock_status: str = "available"
     monthly_sold: int = 0
+    publish_status: str = "draft"
+    category: str = "lainnya"
+    is_bestseller: bool = False
+    is_promo: bool = False
+
+
+class Category(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    slug: str
+    name: str
+    icon: str = "grid"
+    order: int = 100
+    created_at: str = Field(default_factory=now_iso)
+
+
+class CategoryCreate(BaseModel):
+    slug: str
+    name: str
+    icon: str = "grid"
+    order: int = 100
+
+
+class Waitlist(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    nama: Optional[str] = None
+    whatsapp_telegram: Optional[str] = None
+    email: Optional[str] = None
+    telegram_chat_id: Optional[str] = None  # diisi saat user /start bot publik
+    produk_id: str
+    produk_nama: str
+    notified: bool = False
+    notified_via: Optional[str] = None  # telegram | email | both
+    created_at: str = Field(default_factory=now_iso)
+
+
+class WaitlistCreate(BaseModel):
+    nama: Optional[str] = None
+    whatsapp_telegram: Optional[str] = None
+    email: Optional[str] = None
+    produk_id: str
+
+
+class BulkPublishPayload(BaseModel):
+    ids: List[str]
+    publish_status: str  # published | draft
+
+
+class ProductStatusUpdate(BaseModel):
+    publish_status: str  # published | draft
+
 
 
 class Order(BaseModel):
@@ -205,7 +328,14 @@ class StatusUpdate(BaseModel):
 # ---------- Public: Products ----------
 @api_router.get("/products")
 async def list_products():
-    products = await db.products.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    # Ambil setting show_coming_soon (default True)
+    stg = await db.settings.find_one({"id": "stats"}, {"_id": 0}) or {}
+    show_coming_soon = stg.get("show_coming_soon", True)
+    if show_coming_soon:
+        query = {}
+    else:
+        query = {"publish_status": {"$ne": "draft"}}
+    products = await db.products.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
     return products
 
 
@@ -239,6 +369,7 @@ DEFAULT_STATS = {
     ],
     "qris_url": "",
     "bank_accounts": [],
+    "show_coming_soon": True,
 }
 
 
@@ -260,6 +391,7 @@ class StatsUpdate(BaseModel):
     live_feed_names: List[str] = []
     qris_url: str = ""
     bank_accounts: List[dict] = []
+    show_coming_soon: bool = True
 
 
 @api_router.put("/admin/stats")
@@ -276,6 +408,8 @@ async def create_order(payload: OrderCreate):
     product = await db.products.find_one({"id": payload.product_id}, {"_id": 0})
     if not product:
         raise HTTPException(404, "Produk tidak ditemukan")
+    if product.get("publish_status", "published") != "published":
+        raise HTTPException(400, "Produk belum tersedia (Coming Soon)")
     if product.get("stock_status") != "available":
         raise HTTPException(400, "Produk sedang tidak tersedia")
 
@@ -591,6 +725,8 @@ async def admin_bulk_import_products(
             commission_percent=10.0,
             stock_status="available",
             monthly_sold=0,
+            publish_status="draft",
+            category="lainnya",
         ).model_dump()
         for n in cleaned
     ]
@@ -604,11 +740,76 @@ async def admin_bulk_import_products(
 @api_router.put("/admin/products/{product_id}")
 async def admin_update_product(product_id: str, payload: ProductCreate, x_admin_password: Optional[str] = Header(None)):
     await verify_admin(x_admin_password)
+    old = await db.products.find_one({"id": product_id}, {"_id": 0})
+    if not old:
+        raise HTTPException(404, "Produk tidak ditemukan")
     await db.products.update_one({"id": product_id}, {"$set": payload.model_dump()})
     p = await db.products.find_one({"id": product_id}, {"_id": 0})
-    if not p:
-        raise HTTPException(404, "Produk tidak ditemukan")
+
+    # Deteksi transisi Draft -> Published → trigger notifikasi waitlist
+    was_draft = old.get("publish_status", "published") == "draft"
+    now_published = p.get("publish_status") == "published"
+    if was_draft and now_published:
+        try:
+            await _notify_waitlist_on_publish(p)
+        except Exception as e:
+            logger.error(f"Notify waitlist failed: {e}")
     return p
+
+
+@api_router.patch("/admin/products/{product_id}/publish-status")
+async def admin_toggle_publish_status(
+    product_id: str,
+    payload: ProductStatusUpdate,
+    x_admin_password: Optional[str] = Header(None),
+):
+    await verify_admin(x_admin_password)
+    if payload.publish_status not in ("published", "draft"):
+        raise HTTPException(400, "Status tidak valid")
+    old = await db.products.find_one({"id": product_id}, {"_id": 0})
+    if not old:
+        raise HTTPException(404, "Produk tidak ditemukan")
+    await db.products.update_one(
+        {"id": product_id}, {"$set": {"publish_status": payload.publish_status}}
+    )
+    p = await db.products.find_one({"id": product_id}, {"_id": 0})
+    was_draft = old.get("publish_status", "published") == "draft"
+    if was_draft and payload.publish_status == "published":
+        try:
+            await _notify_waitlist_on_publish(p)
+        except Exception as e:
+            logger.error(f"Notify waitlist failed: {e}")
+    return p
+
+
+@api_router.post("/admin/products/bulk-publish")
+async def admin_bulk_publish(
+    payload: BulkPublishPayload,
+    x_admin_password: Optional[str] = Header(None),
+):
+    await verify_admin(x_admin_password)
+    if payload.publish_status not in ("published", "draft"):
+        raise HTTPException(400, "Status tidak valid")
+    # ambil produk yang benar-benar transisi draft→published
+    to_notify = []
+    if payload.publish_status == "published":
+        cursor = db.products.find(
+            {"id": {"$in": payload.ids}, "publish_status": "draft"}, {"_id": 0}
+        )
+        to_notify = await cursor.to_list(1000)
+
+    result = await db.products.update_many(
+        {"id": {"$in": payload.ids}},
+        {"$set": {"publish_status": payload.publish_status}},
+    )
+    # Notify satu-per-satu (async)
+    for p in to_notify:
+        p["publish_status"] = "published"
+        try:
+            await _notify_waitlist_on_publish(p)
+        except Exception as e:
+            logger.error(f"Notify waitlist failed for {p.get('id')}: {e}")
+    return {"updated": result.modified_count, "notified": len(to_notify)}
 
 
 @api_router.delete("/admin/products/{product_id}")
@@ -1391,7 +1592,7 @@ async def admin_upload_image(
     # Defense-in-depth: reject oversized uploads before reading them into memory.
     cl = request.headers.get("content-length")
     if cl and cl.isdigit() and int(cl) > MAX_UPLOAD_BYTES + 8192:
-        raise HTTPException(400, f"Ukuran file maksimal 5MB")
+        raise HTTPException(400, "Ukuran file maksimal 5MB")
 
     content_type = (file.content_type or "").lower()
     if content_type not in ALLOWED_IMAGE_TYPES:
@@ -1431,6 +1632,350 @@ async def get_upload(upload_id: str):
     )
 
 
+# =============================================================================
+# CATEGORIES ENDPOINTS
+# =============================================================================
+
+@api_router.get("/categories")
+async def list_categories():
+    cats = await db.categories.find({}, {"_id": 0}).sort("order", 1).to_list(200)
+    return cats
+
+
+@api_router.post("/admin/categories")
+async def admin_create_category(payload: CategoryCreate, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    exist = await db.categories.find_one({"slug": payload.slug}, {"_id": 0})
+    if exist:
+        raise HTTPException(400, "Slug kategori sudah ada")
+    cat = Category(**payload.model_dump())
+    await db.categories.insert_one(cat.model_dump())
+    return cat.model_dump()
+
+
+@api_router.put("/admin/categories/{cat_id}")
+async def admin_update_category(cat_id: str, payload: CategoryCreate, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    exist = await db.categories.find_one({"id": cat_id}, {"_id": 0})
+    if not exist:
+        raise HTTPException(404, "Kategori tidak ditemukan")
+    # Jika slug berubah, update produk-produk lama supaya tetap ter-reference
+    if payload.slug != exist["slug"]:
+        await db.products.update_many({"category": exist["slug"]}, {"$set": {"category": payload.slug}})
+    await db.categories.update_one({"id": cat_id}, {"$set": payload.model_dump()})
+    return await db.categories.find_one({"id": cat_id}, {"_id": 0})
+
+
+@api_router.delete("/admin/categories/{cat_id}")
+async def admin_delete_category(cat_id: str, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    cat = await db.categories.find_one({"id": cat_id}, {"_id": 0})
+    if not cat:
+        raise HTTPException(404, "Kategori tidak ditemukan")
+    if cat["slug"] == "lainnya":
+        raise HTTPException(400, "Kategori 'Lainnya' tidak bisa dihapus (fallback)")
+    # Semua produk kategori ini dipindah ke 'lainnya'
+    await db.products.update_many({"category": cat["slug"]}, {"$set": {"category": "lainnya"}})
+    await db.categories.delete_one({"id": cat_id})
+    return {"ok": True}
+
+
+# =============================================================================
+# WAITLIST ENDPOINTS
+# =============================================================================
+
+@api_router.post("/waitlist")
+async def create_waitlist(payload: WaitlistCreate):
+    # Validasi lembut: minimal 1 kontak yang bisa dihubungi (WA/Telegram atau Email)
+    has_reachable = any([
+        (payload.whatsapp_telegram or "").strip(),
+        (payload.email or "").strip(),
+    ])
+    if not has_reachable:
+        raise HTTPException(400, "Isi salah satu kontak ya, biar kami bisa kabarin kamu 🙂")
+
+    product = await db.products.find_one({"id": payload.produk_id}, {"_id": 0})
+    if not product:
+        raise HTTPException(404, "Produk tidak ditemukan")
+
+    w = Waitlist(
+        nama=(payload.nama or "").strip() or None,
+        whatsapp_telegram=(payload.whatsapp_telegram or "").strip() or None,
+        email=(payload.email or "").strip() or None,
+        produk_id=product["id"],
+        produk_nama=product["name"],
+    )
+    await db.waitlist.insert_one(w.model_dump())
+    return {"ok": True, "id": w.id, "produk_nama": w.produk_nama}
+
+
+@api_router.get("/admin/waitlist")
+async def admin_list_waitlist(
+    product_id: Optional[str] = Query(None),
+    x_admin_password: Optional[str] = Header(None),
+):
+    await verify_admin(x_admin_password)
+    q = {}
+    if product_id:
+        q["produk_id"] = product_id
+    items = await db.waitlist.find(q, {"_id": 0}).sort("created_at", -1).to_list(5000)
+    return items
+
+
+@api_router.delete("/admin/waitlist/{waitlist_id}")
+async def admin_delete_waitlist(waitlist_id: str, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    r = await db.waitlist.delete_one({"id": waitlist_id})
+    return {"deleted": r.deleted_count}
+
+
+@api_router.get("/admin/waitlist/export")
+async def admin_export_waitlist(
+    product_id: Optional[str] = Query(None),
+    fmt: str = Query("xlsx"),
+    x_admin_password: Optional[str] = Header(None),
+):
+    await verify_admin(x_admin_password)
+    q = {}
+    if product_id:
+        q["produk_id"] = product_id
+    items = await db.waitlist.find(q, {"_id": 0}).sort("created_at", -1).to_list(5000)
+    return exports.export_waitlist(items, fmt)
+
+
+# =============================================================================
+# WAITLIST NOTIFICATION (dipanggil saat produk di-publish)
+# =============================================================================
+
+async def _notify_waitlist_on_publish(product: dict):
+    """Kirim notif ke semua waitlist yang belum di-notify untuk produk ini."""
+    entries = await db.waitlist.find(
+        {"produk_id": product["id"], "notified": False}, {"_id": 0}
+    ).to_list(5000)
+
+    if not entries:
+        # tetap kirim ringkasan ke admin bot
+        await send_telegram(
+            f"✅ Produk <b>{product['name']}</b> berhasil dipublish!\n"
+            f"📣 Notifikasi terkirim ke 0 kontak waitlist (belum ada waitlist)"
+        )
+        return
+
+    store_url = PUBLIC_STORE_URL
+    tg_msg = (
+        f"Halo Sobat Creative! 🎉\n"
+        f"Produk yang kamu tunggu sudah tersedia nih!\n\n"
+        f"✨ <b>{product['name']}</b>\n\n"
+        f"Yuk langsung cek dan pesan sebelum kehabisan:\n"
+        f"👉 {store_url}\n\n"
+        f"— Tim CreativeStore"
+    )
+    email_subject = f"✨ {product['name']} Sudah Tersedia! — CreativeStore"
+    email_html = f"""
+<div style="font-family: -apple-system, Segoe UI, sans-serif; background: #0f1117; color: #fff; padding: 32px; border-radius: 16px; max-width: 560px; margin: 0 auto;">
+  <h2 style="color: #F5A623; margin: 0 0 16px;">Halo Sobat Creative! 🎉</h2>
+  <p style="color: #d0d0d0; line-height: 1.6;">Produk yang kamu tunggu sudah tersedia nih!</p>
+  <div style="background: #1a1d27; border: 1px solid rgba(245,166,35,0.3); padding: 20px; border-radius: 12px; margin: 20px 0;">
+    <p style="margin: 0; font-size: 20px; color: #F5A623; font-weight: 600;">✨ {product['name']}</p>
+  </div>
+  <p style="color: #d0d0d0; line-height: 1.6;">Yuk langsung cek dan pesan sebelum kehabisan:</p>
+  <p style="text-align: center; margin: 24px 0;">
+    <a href="{store_url}" style="display:inline-block; background:#F5A623; color:#0f1117; text-decoration:none; padding:12px 28px; border-radius:9999px; font-weight:600;">Pesan Sekarang →</a>
+  </p>
+  <p style="color: #999; font-size: 12px; text-align:center; margin-top: 32px;">— Tim CreativeStore</p>
+</div>
+"""
+
+    sent_telegram = 0
+    sent_email = 0
+    for w in entries:
+        via = []
+        # Telegram: hanya bisa jika chat_id sudah terisi (user pernah /start bot publik)
+        if w.get("telegram_chat_id"):
+            ok = await send_public_telegram(w["telegram_chat_id"], tg_msg)
+            if ok:
+                sent_telegram += 1
+                via.append("telegram")
+        # Email
+        if w.get("email"):
+            ok = await send_email_resend(w["email"], email_subject, email_html)
+            if ok:
+                sent_email += 1
+                via.append("email")
+
+        await db.waitlist.update_one(
+            {"id": w["id"]},
+            {"$set": {"notified": True, "notified_via": ",".join(via) if via else "none"}},
+        )
+
+    total = len(entries)
+    await send_telegram(
+        f"✅ Produk <b>{product['name']}</b> berhasil dipublish!\n"
+        f"📣 Notifikasi terkirim ke {total} kontak waitlist\n"
+        f"   ({sent_telegram} via Telegram, {sent_email} via Email)"
+    )
+
+
+# =============================================================================
+# TELEGRAM PUBLIC BOT WEBHOOK (menangkap /start dari user waitlist)
+# =============================================================================
+
+@api_router.post("/telegram/public-webhook")
+async def public_telegram_webhook(request: Request):
+    """Webhook Telegram BOT PUBLIK. User yang /start payload waitlist_<id>
+    akan tersimpan chat_id-nya ke dokumen waitlist yang sesuai."""
+    if not TELEGRAM_PUBLIC_BOT_TOKEN:
+        return {"ok": False, "reason": "bot_not_configured"}
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False}
+
+    msg = body.get("message") or body.get("edited_message") or {}
+    chat = msg.get("chat") or {}
+    chat_id = chat.get("id")
+    text = (msg.get("text") or "").strip()
+
+    if not chat_id:
+        return {"ok": True}
+
+    reply_text = None
+    # Handle /start [payload]
+    if text.startswith("/start"):
+        parts = text.split(maxsplit=1)
+        payload = parts[1] if len(parts) > 1 else ""
+        if payload.startswith("waitlist_"):
+            wid = payload.replace("waitlist_", "", 1)
+            r = await db.waitlist.update_one(
+                {"id": wid}, {"$set": {"telegram_chat_id": str(chat_id)}}
+            )
+            if r.modified_count:
+                reply_text = (
+                    "Sip! ✅ Notifikasi Telegram kamu udah aktif.\n"
+                    "Nanti kami kabarin di sini kalau produknya udah ready ya, Sobat Creative! 💛"
+                )
+            else:
+                reply_text = "Halo Sobat Creative! 👋 Kirim /start setelah daftar waitlist ya."
+        else:
+            reply_text = (
+                "Halo Sobat Creative! 👋\n"
+                "Aku bot notifikasi CreativeStore. Kunjungi https://creativestore.my.id "
+                "dan daftar waitlist produk yang kamu tunggu — nanti aku kabarin ke sini!"
+            )
+
+    if reply_text:
+        await send_public_telegram(str(chat_id), reply_text)
+    return {"ok": True}
+
+
+# =============================================================================
+# GENERATE INFO PRODUK (Gemini)
+# =============================================================================
+
+@api_router.post("/admin/generate-info")
+async def admin_generate_info(x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    if not GEMINI_API_KEY:
+        raise HTTPException(
+            400,
+            "GEMINI_API_KEY belum dikonfigurasi. Isi environment variable GEMINI_API_KEY untuk aktifkan fitur ini.",
+        )
+
+    # Ambil semua produk PUBLISHED
+    products = await db.products.find(
+        {"publish_status": "published"}, {"_id": 0}
+    ).sort("created_at", -1).to_list(500)
+
+    if not products:
+        raise HTTPException(400, "Belum ada produk PUBLISHED untuk di-generate.")
+
+    # Ambil kategori untuk mapping slug → nama
+    cats = await db.categories.find({}, {"_id": 0}).to_list(200)
+    cat_map = {c["slug"]: c["name"] for c in cats}
+
+    # Susun data produk untuk prompt
+    lines = []
+    for p in products:
+        badges = []
+        if p.get("is_bestseller"):
+            badges.append("TERLARIS")
+        if p.get("discount_active") and p.get("discount_price"):
+            badges.append("FLASH SALE")
+        if p.get("is_promo"):
+            badges.append("PROMO")
+        price = p.get("discount_price") if (p.get("discount_active") and p.get("discount_price")) else p.get("original_price")
+        cat_name = cat_map.get(p.get("category", "lainnya"), "Lainnya")
+        lines.append(
+            f"- {p['name']} | Kategori: {cat_name} | Harga: Rp {int(price):,} | Badge: {', '.join(badges) if badges else '-'}"
+        )
+    products_text = "\n".join(lines)
+
+    system_prompt = f"""Kamu adalah copywriter untuk toko digital CreativeStore (creativestore.my.id).
+Buat pesan informasi produk yang tersedia untuk dikirim ke grup WhatsApp/Telegram pelanggan.
+
+Sapaan: Sobat Creative / Sahabat Creative
+Nada: warm, friendly, tidak formal, tidak memaksa.
+Domain toko: creativestore.my.id
+
+Data produk yang tersedia (PUBLISHED):
+{products_text}
+
+Buat 2 versi TERPISAH dengan format sebagai berikut:
+
+===VERSI SINGKAT===
+(Maksimal 200 kata. Format ringkas dengan emoji. Highlight produk TERLARIS/PROMO/FLASH SALE jika ada. Cocok untuk status WA atau caption pendek.)
+
+===VERSI LENGKAP===
+(Maksimal 500 kata. Kelompokkan per kategori. Sebutkan harga tiap produk. Sertakan CTA ke creativestore.my.id. Sebutkan info promo/diskon jika ada. Tutup dengan ajakan bergabung menjadi affiliate untuk dapat komisi.)
+
+PENTING: Gunakan pemisah persis "===VERSI SINGKAT===" dan "===VERSI LENGKAP===" agar bisa di-parse otomatis."""
+
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel(model_name="gemini-2.5-flash")
+        resp = await model.generate_content_async(system_prompt)
+        text = (getattr(resp, "text", None) or "").strip()
+    except Exception as e:
+        logger.error(f"Gemini generate-info error: {e}")
+        raise HTTPException(502, f"Gemini error: {str(e)[:200]}")
+
+    # Parse 2 versi
+    versi_singkat = ""
+    versi_lengkap = ""
+    if "===VERSI SINGKAT===" in text and "===VERSI LENGKAP===" in text:
+        parts = text.split("===VERSI LENGKAP===", 1)
+        versi_singkat = parts[0].replace("===VERSI SINGKAT===", "").strip()
+        versi_lengkap = parts[1].strip()
+    else:
+        versi_singkat = text
+        versi_lengkap = text
+
+    return {
+        "versi_singkat": versi_singkat,
+        "versi_lengkap": versi_lengkap,
+        "total_produk": len(products),
+    }
+
+
+# =============================================================================
+# HEALTH CHECK: Konfigurasi Integrasi
+# =============================================================================
+
+@api_router.get("/admin/integration-status")
+async def admin_integration_status(x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    return {
+        "telegram_admin": bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID),
+        "telegram_public": bool(TELEGRAM_PUBLIC_BOT_TOKEN),
+        "telegram_public_username": TELEGRAM_PUBLIC_BOT_USERNAME,
+        "resend_email": bool(RESEND_API_KEY),
+        "resend_from": RESEND_FROM_EMAIL,
+        "gemini": bool(GEMINI_API_KEY),
+        "pakasir": pakasir.is_configured(),
+    }
+
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -1451,6 +1996,38 @@ _scheduler = None
 @app.on_event("startup")
 async def _start_scheduler():
     global _scheduler
+    # Migration: pastikan produk existing punya field publish_status & category
+    try:
+        migrated_status = await db.products.update_many(
+            {"publish_status": {"$exists": False}},
+            {"$set": {"publish_status": "published"}},
+        )
+        migrated_cat = await db.products.update_many(
+            {"category": {"$exists": False}},
+            {"$set": {"category": "lainnya"}},
+        )
+        migrated_bs = await db.products.update_many(
+            {"is_bestseller": {"$exists": False}},
+            {"$set": {"is_bestseller": False, "is_promo": False}},
+        )
+        if migrated_status.modified_count or migrated_cat.modified_count or migrated_bs.modified_count:
+            logger.info(
+                f"Product migration: publish_status={migrated_status.modified_count}, "
+                f"category={migrated_cat.modified_count}, badges={migrated_bs.modified_count}"
+            )
+    except Exception as e:
+        logger.error(f"Product migration error: {e}")
+
+    # Seed kategori default kalau kosong
+    try:
+        count = await db.categories.count_documents({})
+        if count == 0:
+            docs = [Category(**c).model_dump() for c in DEFAULT_CATEGORIES]
+            await db.categories.insert_many(docs)
+            logger.info(f"Seeded {len(docs)} default categories")
+    except Exception as e:
+        logger.error(f"Category seed error: {e}")
+
     try:
         _scheduler = init_scheduler(db, send_telegram)
         _scheduler.start()

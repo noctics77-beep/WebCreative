@@ -34,7 +34,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Edit, LogOut, Plus, Trash2, Loader2, Check, X, Download, Search, Upload, Link2, Image as ImageIcon } from "lucide-react";
+import { Edit, LogOut, Plus, Trash2, Loader2, Check, X, Download, Search, Upload, Link2, Image as ImageIcon, Eye, EyeOff, Filter, Sparkles, Copy, RefreshCw, Bell, Tag } from "lucide-react";
 
 export default function AdminPanel() {
   const [password, setPassword] = useState(localStorage.getItem("cs_admin_pw") || "");
@@ -122,6 +122,8 @@ export default function AdminPanel() {
         <TabsList className="bg-[#1a1d27] border border-white/5 flex-wrap h-auto">
           <TabsTrigger value="dashboard" data-testid="tab-dashboard">Dashboard</TabsTrigger>
           <TabsTrigger value="products" data-testid="tab-products">Produk</TabsTrigger>
+          <TabsTrigger value="categories" data-testid="tab-categories">Kategori</TabsTrigger>
+          <TabsTrigger value="waitlist" data-testid="tab-waitlist">Waitlist</TabsTrigger>
           <TabsTrigger value="orders" data-testid="tab-orders">Order</TabsTrigger>
           <TabsTrigger value="customers" data-testid="tab-customers">Pelanggan</TabsTrigger>
           <TabsTrigger value="affiliates" data-testid="tab-affiliates">Affiliate</TabsTrigger>
@@ -136,6 +138,12 @@ export default function AdminPanel() {
         </TabsContent>
         <TabsContent value="products" className="mt-6">
           <ProductsTab api={api} />
+        </TabsContent>
+        <TabsContent value="categories" className="mt-6">
+          <CategoriesTab api={api} />
+        </TabsContent>
+        <TabsContent value="waitlist" className="mt-6">
+          <WaitlistTab api={api} password={password} />
         </TabsContent>
         <TabsContent value="orders" className="mt-6">
           <OrdersTab api={api} />
@@ -166,18 +174,103 @@ export default function AdminPanel() {
 // ---------- Products ----------
 function ProductsTab({ api }) {
   const [items, setItems] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [editing, setEditing] = useState(null);
   const [open, setOpen] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
+  const [filter, setFilter] = useState("all"); // all | published | draft
+  const [selectedIds, setSelectedIds] = useState(new Set());
+  const [generateOpen, setGenerateOpen] = useState(false);
 
   const load = () => api.get("/products").then((r) => setItems(r.data));
-  useEffect(() => { load(); }, []);
+  const loadCategories = () => api.get("/categories").then((r) => setCategories(r.data));
+
+  useEffect(() => {
+    load();
+    loadCategories();
+  }, []);
+
+  const publishedCount = items.filter((p) => p.publish_status !== "draft").length;
+  const draftCount = items.filter((p) => p.publish_status === "draft").length;
+
+  const filtered = items.filter((p) => {
+    if (filter === "published") return p.publish_status !== "draft";
+    if (filter === "draft") return p.publish_status === "draft";
+    return true;
+  });
+
+  const catNameMap = useMemo(() => {
+    const m = {};
+    categories.forEach((c) => { m[c.slug] = c.name; });
+    return m;
+  }, [categories]);
 
   const remove = async (id) => {
     if (!confirm("Hapus produk ini?")) return;
     await api.delete(`/admin/products/${id}`);
     toast.success("Produk dihapus");
     load();
+  };
+
+  const togglePublish = async (product) => {
+    const nextStatus = product.publish_status === "draft" ? "published" : "draft";
+    if (nextStatus === "published") {
+      // Ambil jumlah waitlist untuk konfirmasi
+      let wCount = 0;
+      try {
+        const r = await api.get(`/admin/waitlist?product_id=${product.id}`);
+        wCount = r.data.length;
+      } catch (_e) { /* ignore */ }
+      const ok = confirm(
+        `Produk ini akan dipublish dan notifikasi otomatis dikirim ke ${wCount} orang di waitlist. Lanjutkan?`
+      );
+      if (!ok) return;
+    }
+    try {
+      await api.patch(`/admin/products/${product.id}/publish-status`, {
+        publish_status: nextStatus,
+      });
+      toast.success(nextStatus === "published" ? "Produk dipublish 🎉" : "Produk di-unpublish (Draft)");
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Gagal ubah status");
+    }
+  };
+
+  const bulkPublish = async (status) => {
+    if (selectedIds.size === 0) return toast.error("Pilih minimal 1 produk");
+    if (status === "published") {
+      const ok = confirm(
+        `Publish ${selectedIds.size} produk terpilih? Notifikasi otomatis akan dikirim ke waitlist masing-masing produk.`
+      );
+      if (!ok) return;
+    }
+    try {
+      const r = await api.post("/admin/products/bulk-publish", {
+        ids: Array.from(selectedIds),
+        publish_status: status,
+      });
+      toast.success(`${r.data.updated} produk di-${status}. ${r.data.notified} notif waitlist terkirim.`);
+      setSelectedIds(new Set());
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Gagal bulk update");
+    }
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === filtered.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(filtered.map((p) => p.id)));
+    }
+  };
+
+  const toggleSelect = (id) => {
+    const s = new Set(selectedIds);
+    if (s.has(id)) s.delete(id);
+    else s.add(id);
+    setSelectedIds(s);
   };
 
   const incompleteCount = items.filter(
@@ -189,13 +282,29 @@ function ProductsTab({ api }) {
       <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
         <div>
           <h3 className="font-display text-lg">Daftar Produk ({items.length})</h3>
-          {incompleteCount > 0 && (
-            <p data-testid="incomplete-count" className="text-xs text-amber-300/80 mt-1">
-              ⚠️ {incompleteCount} produk belum lengkap (foto/harga kosong)
-            </p>
-          )}
+          <div className="text-xs mt-1 flex items-center gap-3">
+            <span data-testid="counter-published" className="text-green-300">
+              <Eye size={11} className="inline mr-0.5" /> {publishedCount} Published
+            </span>
+            <span data-testid="counter-draft" className="text-purple-300">
+              <EyeOff size={11} className="inline mr-0.5" /> {draftCount} Draft
+            </span>
+            {incompleteCount > 0 && (
+              <span data-testid="incomplete-count" className="text-amber-300/80">
+                ⚠️ {incompleteCount} belum lengkap
+              </span>
+            )}
+          </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          <Button
+            data-testid="generate-info-btn"
+            variant="outline"
+            onClick={() => setGenerateOpen(true)}
+            className="bg-transparent border-[#F5A623]/40 hover:bg-[#F5A623]/10 text-[#F5A623]"
+          >
+            <Sparkles size={15} className="mr-1" /> Generate Info Produk
+          </Button>
           <Button
             data-testid="bulk-import-btn"
             variant="outline"
@@ -214,23 +323,86 @@ function ProductsTab({ api }) {
         </div>
       </div>
 
+      {/* Filter + Bulk Actions */}
+      <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+        <div className="flex gap-2">
+          {[
+            { k: "all", label: "Semua" },
+            { k: "published", label: "Published" },
+            { k: "draft", label: "Draft" },
+          ].map((f) => (
+            <button
+              key={f.k}
+              data-testid={`filter-${f.k}`}
+              onClick={() => setFilter(f.k)}
+              className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+                filter === f.k
+                  ? "bg-[#F5A623]/15 border-[#F5A623]/50 text-[#F5A623]"
+                  : "bg-transparent border-white/15 text-white/60 hover:bg-white/5"
+              }`}
+            >
+              <Filter size={11} className="inline mr-1" /> {f.label}
+            </button>
+          ))}
+        </div>
+        {selectedIds.size > 0 && (
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-white/60">{selectedIds.size} dipilih</span>
+            <Button
+              data-testid="bulk-publish-btn"
+              size="sm"
+              onClick={() => bulkPublish("published")}
+              className="bg-green-600 hover:bg-green-700 text-white h-8"
+            >
+              <Eye size={13} className="mr-1" /> Publish
+            </Button>
+            <Button
+              data-testid="bulk-unpublish-btn"
+              size="sm"
+              onClick={() => bulkPublish("draft")}
+              className="bg-purple-600 hover:bg-purple-700 text-white h-8"
+            >
+              <EyeOff size={13} className="mr-1" /> Unpublish
+            </Button>
+          </div>
+        )}
+      </div>
+
       <Table>
         <TableHeader>
           <TableRow className="border-white/10 hover:bg-transparent">
+            <TableHead className="text-white/60 w-8">
+              <input
+                type="checkbox"
+                data-testid="select-all-checkbox"
+                checked={filtered.length > 0 && selectedIds.size === filtered.length}
+                onChange={toggleSelectAll}
+                className="accent-[#F5A623]"
+              />
+            </TableHead>
             <TableHead className="text-white/60">Produk</TableHead>
+            <TableHead className="text-white/60">Kategori</TableHead>
             <TableHead className="text-white/60">Harga</TableHead>
-            <TableHead className="text-white/60">Komisi</TableHead>
-            <TableHead className="text-white/60">Terjual</TableHead>
-            <TableHead className="text-white/60">Stok</TableHead>
+            <TableHead className="text-white/60">Status</TableHead>
             <TableHead className="text-white/60 text-right">Aksi</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {items.map((p) => {
+          {filtered.map((p) => {
             const has = p.discount_active && p.discount_price;
             const incomplete = !p.photo_url || !p.original_price || p.original_price <= 0;
+            const isDraft = p.publish_status === "draft";
             return (
               <TableRow key={p.id} className="border-white/5" data-testid={`product-row-${p.id}`}>
+                <TableCell>
+                  <input
+                    type="checkbox"
+                    data-testid={`select-${p.id}`}
+                    checked={selectedIds.has(p.id)}
+                    onChange={() => toggleSelect(p.id)}
+                    className="accent-[#F5A623]"
+                  />
+                </TableCell>
                 <TableCell>
                   <div className="flex items-center gap-3">
                     {p.photo_url ? (
@@ -241,7 +413,7 @@ function ProductsTab({ api }) {
                       </div>
                     )}
                     <div>
-                      <div className="text-sm font-medium flex items-center gap-2">
+                      <div className="text-sm font-medium flex items-center gap-2 flex-wrap">
                         {p.name}
                         {incomplete && (
                           <span
@@ -251,27 +423,41 @@ function ProductsTab({ api }) {
                             Belum Lengkap
                           </span>
                         )}
+                        {p.is_bestseller && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-500/15 text-red-300 border border-red-500/30">
+                            🔥 Terlaris
+                          </span>
+                        )}
+                        {p.is_promo && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-500/15 text-blue-300 border border-blue-500/30">
+                            🏷️ Promo
+                          </span>
+                        )}
                       </div>
                       <div className="text-xs text-white/40 line-clamp-1 max-w-xs">{p.description}</div>
                     </div>
                   </div>
                 </TableCell>
+                <TableCell className="text-xs text-white/70">
+                  {catNameMap[p.category] || p.category || "Lainnya"}
+                </TableCell>
                 <TableCell className="text-sm">
                   {has && <div className="text-white/40 line-through text-xs">{formatIDR(p.original_price)}</div>}
                   <div className="gold-text font-semibold">{formatIDR(has ? p.discount_price : p.original_price)}</div>
                 </TableCell>
-                <TableCell className="text-sm">{p.commission_percent}%</TableCell>
-                <TableCell className="text-sm">
-                  <span className="text-[#F5A623] font-medium">🔥 {p.monthly_sold || 0}</span>
-                </TableCell>
                 <TableCell>
-                  <span className={`px-2 py-0.5 rounded-full text-[11px] border ${
-                    p.stock_status === "available"
-                      ? "bg-green-500/15 text-green-300 border-green-500/30"
-                      : "bg-red-500/15 text-red-300 border-red-500/30"
-                  }`}>
-                    {p.stock_status === "available" ? "Tersedia" : "Habis"}
-                  </span>
+                  <button
+                    data-testid={`toggle-status-${p.id}`}
+                    onClick={() => togglePublish(p)}
+                    className={`px-2.5 py-1 rounded-full text-[11px] border transition-colors ${
+                      isDraft
+                        ? "bg-purple-500/15 text-purple-300 border-purple-500/40 hover:bg-purple-500/25"
+                        : "bg-green-500/15 text-green-300 border-green-500/40 hover:bg-green-500/25"
+                    }`}
+                    title={isDraft ? "Klik untuk PUBLISH" : "Klik untuk UNPUBLISH (jadi Draft)"}
+                  >
+                    {isDraft ? <><EyeOff size={11} className="inline mr-0.5" /> DRAFT</> : <><Eye size={11} className="inline mr-0.5" /> PUBLISHED</>}
+                  </button>
                 </TableCell>
                 <TableCell className="text-right">
                   <button
@@ -292,7 +478,7 @@ function ProductsTab({ api }) {
               </TableRow>
             );
           })}
-          {items.length === 0 && (
+          {filtered.length === 0 && (
             <TableRow><TableCell colSpan={6} className="text-center text-white/40 py-6">Belum ada produk</TableCell></TableRow>
           )}
         </TableBody>
@@ -304,6 +490,7 @@ function ProductsTab({ api }) {
           open={open}
           onOpenChange={setOpen}
           editing={editing}
+          categories={categories}
           api={api}
           onSaved={() => { setOpen(false); load(); }}
         />
@@ -317,16 +504,28 @@ function ProductsTab({ api }) {
           onImported={() => { setBulkOpen(false); load(); }}
         />
       )}
+
+      {generateOpen && (
+        <GenerateInfoDialog
+          open={generateOpen}
+          onOpenChange={setGenerateOpen}
+          api={api}
+        />
+      )}
     </div>
   );
 }
 
-function ProductFormDialog({ open, onOpenChange, editing, api, onSaved }) {
+function ProductFormDialog({ open, onOpenChange, editing, categories, api, onSaved }) {
   const [form, setForm] = useState(() => editing ? {
     ...editing,
     original_price: editing.original_price,
     discount_price: editing.discount_price || "",
     monthly_sold: editing.monthly_sold || 0,
+    publish_status: editing.publish_status || "draft",
+    category: editing.category || "lainnya",
+    is_bestseller: !!editing.is_bestseller,
+    is_promo: !!editing.is_promo,
   } : {
     name: "",
     photo_url: "",
@@ -337,6 +536,10 @@ function ProductFormDialog({ open, onOpenChange, editing, api, onSaved }) {
     commission_percent: 10,
     stock_status: "available",
     monthly_sold: 0,
+    publish_status: "draft", // DEFAULT DRAFT untuk produk baru
+    category: "lainnya",
+    is_bestseller: false,
+    is_promo: false,
   });
   const [saving, setSaving] = useState(false);
 
@@ -354,11 +557,15 @@ function ProductFormDialog({ open, onOpenChange, editing, api, onSaved }) {
       commission_percent: parseFloat(form.commission_percent),
       stock_status: form.stock_status,
       monthly_sold: parseInt(form.monthly_sold || 0, 10),
+      publish_status: form.publish_status,
+      category: form.category,
+      is_bestseller: form.is_bestseller,
+      is_promo: form.is_promo,
     };
     try {
       if (editing) await api.put(`/admin/products/${editing.id}`, payload);
       else await api.post("/admin/products", payload);
-      toast.success(editing ? "Produk diupdate" : "Produk ditambahkan");
+      toast.success(editing ? "Produk diupdate" : "Produk ditambahkan (default: Draft)");
       onSaved();
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Gagal menyimpan");
@@ -384,6 +591,27 @@ function ProductFormDialog({ open, onOpenChange, editing, api, onSaved }) {
             />
           </Field>
           <div className="grid grid-cols-2 gap-3">
+            <Field label="Kategori">
+              <Select value={form.category} onValueChange={(v) => setForm({ ...form, category: v })}>
+                <SelectTrigger data-testid="pf-category" className="bg-[#0f1117] border-white/15"><SelectValue /></SelectTrigger>
+                <SelectContent className="bg-[#1a1d27] border-white/10 text-white">
+                  {(categories || []).map((c) => (
+                    <SelectItem key={c.slug} value={c.slug}>{c.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="Status Publikasi">
+              <Select value={form.publish_status} onValueChange={(v) => setForm({ ...form, publish_status: v })}>
+                <SelectTrigger data-testid="pf-publish-status" className="bg-[#0f1117] border-white/15"><SelectValue /></SelectTrigger>
+                <SelectContent className="bg-[#1a1d27] border-white/10 text-white">
+                  <SelectItem value="draft">📝 Draft (Coming Soon)</SelectItem>
+                  <SelectItem value="published">✅ Published (Tayang)</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
             <Field label="Harga Asli">
               <Input data-testid="pf-original-price" type="number" value={form.original_price} onChange={(e) => setForm({ ...form, original_price: e.target.value })}
                 className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]" />
@@ -394,7 +622,7 @@ function ProductFormDialog({ open, onOpenChange, editing, api, onSaved }) {
             </Field>
           </div>
           <div className="flex items-center justify-between px-3 py-2 rounded-md bg-[#0f1117] border border-white/10">
-            <Label className="text-sm">Aktifkan Diskon</Label>
+            <Label className="text-sm">Aktifkan Diskon (Flash Sale otomatis)</Label>
             <Switch
               data-testid="pf-discount-active"
               checked={form.discount_active}
@@ -432,6 +660,27 @@ function ProductFormDialog({ open, onOpenChange, editing, api, onSaved }) {
               className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
             />
           </Field>
+          {/* Badge toggles */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex items-center justify-between px-3 py-2 rounded-md bg-[#0f1117] border border-white/10">
+              <Label className="text-sm">🔥 Badge Terlaris</Label>
+              <Switch
+                data-testid="pf-bestseller"
+                checked={form.is_bestseller}
+                onCheckedChange={(v) => setForm({ ...form, is_bestseller: v })}
+                className="data-[state=checked]:bg-red-500"
+              />
+            </div>
+            <div className="flex items-center justify-between px-3 py-2 rounded-md bg-[#0f1117] border border-white/10">
+              <Label className="text-sm">🏷️ Badge Promo</Label>
+              <Switch
+                data-testid="pf-promo"
+                checked={form.is_promo}
+                onCheckedChange={(v) => setForm({ ...form, is_promo: v })}
+                className="data-[state=checked]:bg-blue-500"
+              />
+            </div>
+          </div>
           <DialogFooter>
             <Button type="submit" data-testid="pf-submit" disabled={saving} className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold">
               {saving ? <Loader2 className="animate-spin" size={15} /> : "Simpan"}
@@ -1068,6 +1317,7 @@ function SettingsTab({ api }) {
     live_feed_names: [],
     qris_url: "",
     bank_accounts: [],
+    show_coming_soon: true,
   });
   const [namesText, setNamesText] = useState("");
   const [loading, setLoading] = useState(true);
@@ -1197,6 +1447,20 @@ function SettingsTab({ api }) {
             data-testid="settings-livefeed-toggle"
             checked={stats.live_feed_enabled}
             onCheckedChange={(v) => setStats({ ...stats, live_feed_enabled: v })}
+            className="data-[state=checked]:bg-[#F5A623]"
+          />
+        </div>
+
+        <h3 className="font-display text-lg pt-2">Coming Soon di Storefront</h3>
+        <div className="flex items-center justify-between px-3 py-2 rounded-md bg-[#0f1117] border border-white/10">
+          <div>
+            <Label className="text-sm">Tampilkan produk Coming Soon di storefront</Label>
+            <p className="text-[11px] text-white/50 mt-0.5">Jika OFF, hanya produk PUBLISHED yang tampil di katalog.</p>
+          </div>
+          <Switch
+            data-testid="settings-show-coming-soon"
+            checked={stats.show_coming_soon}
+            onCheckedChange={(v) => setStats({ ...stats, show_coming_soon: v })}
             className="data-[state=checked]:bg-[#F5A623]"
           />
         </div>
@@ -2033,6 +2297,439 @@ function AffiliateExportDialog({ mode, affiliate, password, open, onOpenChange }
             {busy ? <Loader2 className="animate-spin" size={14} /> : <><Download size={14} className="mr-2" /> Download</>}
           </Button>
         </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+
+// ============================================================================
+// CATEGORIES TAB
+// ============================================================================
+function CategoriesTab({ api }) {
+  const [items, setItems] = useState([]);
+  const [editing, setEditing] = useState(null);
+  const [open, setOpen] = useState(false);
+
+  const load = () => api.get("/categories").then((r) => setItems(r.data));
+  useEffect(() => { load(); }, []);
+
+  const remove = async (c) => {
+    if (c.slug === "lainnya") {
+      toast.error("Kategori 'Lainnya' tidak bisa dihapus (fallback)");
+      return;
+    }
+    if (!confirm(`Hapus kategori "${c.name}"? Produk yang pakai kategori ini akan dipindah ke "Lainnya".`)) return;
+    try {
+      await api.delete(`/admin/categories/${c.id}`);
+      toast.success("Kategori dihapus");
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Gagal hapus");
+    }
+  };
+
+  return (
+    <div className="glass rounded-2xl p-6">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h3 className="font-display text-lg">Kelola Kategori ({items.length})</h3>
+          <p className="text-xs text-white/50 mt-1">Kategori dipakai di form produk & filter storefront.</p>
+        </div>
+        <Button
+          data-testid="add-category-btn"
+          onClick={() => { setEditing(null); setOpen(true); }}
+          className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold"
+        >
+          <Plus size={15} className="mr-1" /> Tambah Kategori
+        </Button>
+      </div>
+
+      <Table>
+        <TableHeader>
+          <TableRow className="border-white/10 hover:bg-transparent">
+            <TableHead className="text-white/60">Urutan</TableHead>
+            <TableHead className="text-white/60">Nama</TableHead>
+            <TableHead className="text-white/60">Slug</TableHead>
+            <TableHead className="text-white/60">Icon</TableHead>
+            <TableHead className="text-white/60 text-right">Aksi</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {items.map((c) => (
+            <TableRow key={c.id} className="border-white/5" data-testid={`cat-row-${c.slug}`}>
+              <TableCell className="text-white/60 w-16">{c.order}</TableCell>
+              <TableCell className="text-sm">{c.name}</TableCell>
+              <TableCell className="text-xs text-white/60 font-mono">{c.slug}</TableCell>
+              <TableCell className="text-xs text-white/60 font-mono">{c.icon}</TableCell>
+              <TableCell className="text-right">
+                <button
+                  onClick={() => { setEditing(c); setOpen(true); }}
+                  className="p-2 rounded-md text-white/70 hover:bg-white/5 hover:text-[#F5A623]"
+                >
+                  <Edit size={15} />
+                </button>
+                <button
+                  onClick={() => remove(c)}
+                  className="p-2 rounded-md text-white/70 hover:bg-white/5 hover:text-red-400"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </TableCell>
+            </TableRow>
+          ))}
+          {items.length === 0 && (
+            <TableRow><TableCell colSpan={5} className="text-center text-white/40 py-6">Belum ada kategori</TableCell></TableRow>
+          )}
+        </TableBody>
+      </Table>
+
+      {open && (
+        <CategoryFormDialog
+          key={editing?.id || "new"}
+          open={open}
+          onOpenChange={setOpen}
+          editing={editing}
+          api={api}
+          onSaved={() => { setOpen(false); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function CategoryFormDialog({ open, onOpenChange, editing, api, onSaved }) {
+  const [form, setForm] = useState(() => editing || {
+    slug: "",
+    name: "",
+    icon: "grid",
+    order: 100,
+  });
+  const [saving, setSaving] = useState(false);
+
+  const ICON_OPTIONS = [
+    { v: "sparkles", label: "✨ Sparkles (AI)" },
+    { v: "video", label: "🎬 Video" },
+    { v: "shield", label: "🛡️ Shield (VPN)" },
+    { v: "zap", label: "⚡ Zap (Produktivitas)" },
+    { v: "play", label: "▶️ Play (Hiburan)" },
+    { v: "mail", label: "📧 Mail" },
+    { v: "grid", label: "🔳 Grid (Lainnya)" },
+  ];
+
+  const save = async (e) => {
+    e.preventDefault();
+    if (!form.name || !form.slug) return toast.error("Nama & slug wajib");
+    setSaving(true);
+    const payload = {
+      slug: form.slug.toLowerCase().replace(/[^a-z0-9-]/g, "-"),
+      name: form.name,
+      icon: form.icon,
+      order: parseInt(form.order || 100, 10),
+    };
+    try {
+      if (editing) await api.put(`/admin/categories/${editing.id}`, payload);
+      else await api.post("/admin/categories", payload);
+      toast.success(editing ? "Kategori diupdate" : "Kategori ditambahkan");
+      onSaved();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Gagal menyimpan");
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-[#1a1d27] border-white/10 text-white sm:max-w-[440px]">
+        <DialogHeader>
+          <DialogTitle className="font-display">{editing ? "Edit Kategori" : "Tambah Kategori"}</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={save} className="space-y-3">
+          <Field label="Nama Kategori">
+            <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+              className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]" />
+          </Field>
+          <Field label="Slug (URL-friendly)">
+            <Input value={form.slug} onChange={(e) => setForm({ ...form, slug: e.target.value })}
+              placeholder="contoh: ai-tools"
+              className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]" />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Icon">
+              <Select value={form.icon} onValueChange={(v) => setForm({ ...form, icon: v })}>
+                <SelectTrigger className="bg-[#0f1117] border-white/15"><SelectValue /></SelectTrigger>
+                <SelectContent className="bg-[#1a1d27] border-white/10 text-white">
+                  {ICON_OPTIONS.map((o) => <SelectItem key={o.v} value={o.v}>{o.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="Urutan">
+              <Input type="number" value={form.order} onChange={(e) => setForm({ ...form, order: e.target.value })}
+                className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]" />
+            </Field>
+          </div>
+          <DialogFooter>
+            <Button type="submit" disabled={saving} className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold">
+              {saving ? <Loader2 className="animate-spin" size={15} /> : "Simpan"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ============================================================================
+// WAITLIST TAB
+// ============================================================================
+function WaitlistTab({ api, password }) {
+  const [items, setItems] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [productFilter, setProductFilter] = useState("all");
+  const [integrationStatus, setIntegrationStatus] = useState(null);
+
+  const load = () => {
+    const url = productFilter === "all" ? "/admin/waitlist" : `/admin/waitlist?product_id=${productFilter}`;
+    api.get(url).then((r) => setItems(r.data));
+  };
+  useEffect(() => { load(); }, [productFilter]);
+  useEffect(() => {
+    api.get("/products").then((r) => setProducts(r.data));
+    api.get("/admin/integration-status").then((r) => setIntegrationStatus(r.data)).catch(() => {});
+  }, []);
+
+  const remove = async (id) => {
+    if (!confirm("Hapus entri waitlist ini?")) return;
+    await api.delete(`/admin/waitlist/${id}`);
+    toast.success("Entri dihapus");
+    load();
+  };
+
+  const exportFile = async (fmt) => {
+    try {
+      const params = { fmt };
+      if (productFilter !== "all") params.product_id = productFilter;
+      await downloadAdminFile(password, "/admin/waitlist/export", params);
+      toast.success("Waitlist diunduh");
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Gagal export");
+    }
+  };
+
+  return (
+    <div className="glass rounded-2xl p-6">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <div>
+          <h3 className="font-display text-lg flex items-center gap-2">
+            <Bell size={18} className="text-[#F5A623]" /> Waitlist ({items.length})
+          </h3>
+          <p className="text-xs text-white/50 mt-1">Pembeli yang menunggu produk Coming Soon di-publish.</p>
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          <Button variant="outline" onClick={() => exportFile("xlsx")}
+            className="bg-transparent border-white/15 hover:bg-white/5 text-white">
+            <Download size={14} className="mr-1.5" /> XLSX
+          </Button>
+          <Button variant="outline" onClick={() => exportFile("csv")}
+            className="bg-transparent border-white/15 hover:bg-white/5 text-white">
+            <Download size={14} className="mr-1.5" /> CSV
+          </Button>
+        </div>
+      </div>
+
+      {/* Integration status banner */}
+      {integrationStatus && (
+        <div className="mb-4 p-3 rounded-lg bg-white/[0.03] border border-white/10 text-xs space-y-1">
+          <div className={integrationStatus.telegram_public ? "text-green-300" : "text-amber-300/80"}>
+            {integrationStatus.telegram_public
+              ? `✅ Bot Telegram publik aktif — @${integrationStatus.telegram_public_username}`
+              : "⚠️ Bot Telegram publik belum dikonfigurasi. Isi TELEGRAM_PUBLIC_BOT_TOKEN untuk aktifkan notif Telegram waitlist."}
+          </div>
+          <div className={integrationStatus.resend_email ? "text-green-300" : "text-amber-300/80"}>
+            {integrationStatus.resend_email
+              ? `✅ Email Resend aktif — from: ${integrationStatus.resend_from}`
+              : "⚠️ Email notifikasi belum dikonfigurasi. Isi RESEND_API_KEY untuk aktifkan fitur ini."}
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-xs text-white/60">Filter Produk:</span>
+        <Select value={productFilter} onValueChange={setProductFilter}>
+          <SelectTrigger className="bg-[#0f1117] border-white/15 h-9 w-64"><SelectValue /></SelectTrigger>
+          <SelectContent className="bg-[#1a1d27] border-white/10 text-white max-h-72">
+            <SelectItem value="all">Semua Produk</SelectItem>
+            {products.map((p) => (
+              <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <Table>
+        <TableHeader>
+          <TableRow className="border-white/10 hover:bg-transparent">
+            <TableHead className="text-white/60">Tanggal</TableHead>
+            <TableHead className="text-white/60">Produk</TableHead>
+            <TableHead className="text-white/60">Nama</TableHead>
+            <TableHead className="text-white/60">WA/Telegram</TableHead>
+            <TableHead className="text-white/60">Email</TableHead>
+            <TableHead className="text-white/60">Status</TableHead>
+            <TableHead className="text-white/60 text-right">Aksi</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {items.map((w) => (
+            <TableRow key={w.id} className="border-white/5" data-testid={`waitlist-row-${w.id}`}>
+              <TableCell className="text-xs text-white/60">
+                {w.created_at ? new Date(w.created_at).toLocaleString("id-ID") : "-"}
+              </TableCell>
+              <TableCell className="text-sm">{w.produk_nama}</TableCell>
+              <TableCell className="text-sm">{w.nama || "-"}</TableCell>
+              <TableCell className="text-xs text-white/70 font-mono">
+                {w.whatsapp_telegram || "-"}
+                {w.telegram_chat_id && <div className="text-green-400 text-[10px]">✓ TG connected</div>}
+              </TableCell>
+              <TableCell className="text-xs text-white/70">{w.email || "-"}</TableCell>
+              <TableCell>
+                {w.notified ? (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] bg-green-500/15 text-green-300 border border-green-500/30">
+                    ✓ Terkirim
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                    Pending
+                  </span>
+                )}
+              </TableCell>
+              <TableCell className="text-right">
+                <button
+                  onClick={() => remove(w.id)}
+                  className="p-2 rounded-md text-white/70 hover:bg-white/5 hover:text-red-400"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </TableCell>
+            </TableRow>
+          ))}
+          {items.length === 0 && (
+            <TableRow><TableCell colSpan={7} className="text-center text-white/40 py-6">Belum ada waitlist</TableCell></TableRow>
+          )}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+// ============================================================================
+// GENERATE INFO PRODUK DIALOG
+// ============================================================================
+function GenerateInfoDialog({ open, onOpenChange, api }) {
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+  const [activeTab, setActiveTab] = useState("singkat");
+
+  const generate = async () => {
+    setLoading(true);
+    setError("");
+    setResult(null);
+    try {
+      const r = await api.post("/admin/generate-info");
+      setResult(r.data);
+    } catch (e) {
+      setError(e?.response?.data?.detail || "Gagal generate");
+    } finally { setLoading(false); }
+  };
+
+  useEffect(() => {
+    if (open && !result) generate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const copyText = (text) => {
+    navigator.clipboard.writeText(text);
+    toast.success("Disalin ke clipboard");
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-[#1a1d27] border-white/10 text-white sm:max-w-[640px] max-h-[85vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="font-display flex items-center gap-2">
+            <Sparkles size={18} className="text-[#F5A623]" /> Generate Info Produk
+          </DialogTitle>
+        </DialogHeader>
+
+        {loading && (
+          <div className="py-10 text-center">
+            <Loader2 className="animate-spin mx-auto text-[#F5A623] mb-3" size={32} />
+            <p className="text-sm text-white/60">Sedang menghasilkan info produk...</p>
+          </div>
+        )}
+
+        {error && (
+          <div className="p-4 rounded-lg bg-red-500/10 border border-red-500/30 text-sm text-red-300">
+            {error}
+            <div className="mt-3">
+              <Button onClick={generate} size="sm" className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117]">
+                <RefreshCw size={13} className="mr-1" /> Coba Lagi
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {result && !loading && (
+          <>
+            <div className="text-xs text-white/50 mb-2">
+              {result.total_produk} produk PUBLISHED di-generate
+            </div>
+
+            <div className="flex border border-white/10 rounded-lg overflow-hidden mb-3">
+              <button
+                data-testid="tab-singkat"
+                onClick={() => setActiveTab("singkat")}
+                className={`flex-1 py-2 text-sm font-medium transition-colors ${
+                  activeTab === "singkat"
+                    ? "bg-[#F5A623]/15 text-[#F5A623]"
+                    : "bg-transparent text-white/60 hover:bg-white/5"
+                }`}
+              >
+                Versi Singkat
+              </button>
+              <button
+                data-testid="tab-lengkap"
+                onClick={() => setActiveTab("lengkap")}
+                className={`flex-1 py-2 text-sm font-medium transition-colors ${
+                  activeTab === "lengkap"
+                    ? "bg-[#F5A623]/15 text-[#F5A623]"
+                    : "bg-transparent text-white/60 hover:bg-white/5"
+                }`}
+              >
+                Versi Lengkap
+              </button>
+            </div>
+
+            <div className="bg-[#0f1117] border border-white/10 rounded-lg p-4 whitespace-pre-wrap text-sm text-white/90 max-h-80 overflow-y-auto font-mono leading-relaxed">
+              {activeTab === "singkat" ? result.versi_singkat : result.versi_lengkap}
+            </div>
+
+            <div className="flex gap-2 mt-3">
+              <Button
+                onClick={() => copyText(activeTab === "singkat" ? result.versi_singkat : result.versi_lengkap)}
+                className="flex-1 bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold"
+              >
+                <Copy size={14} className="mr-1.5" /> Copy
+              </Button>
+              <Button
+                onClick={generate}
+                variant="outline"
+                className="bg-transparent border-white/20 hover:bg-white/5 text-white"
+              >
+                <RefreshCw size={14} className="mr-1.5" /> Generate Ulang
+              </Button>
+            </div>
+          </>
+        )}
       </DialogContent>
     </Dialog>
   );
