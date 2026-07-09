@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, API } from "@/lib/api";
-import { MessageCircle, X, Send, Loader2 } from "lucide-react";
+import { MessageCircle, X, Send, Loader2, Sparkles } from "lucide-react";
 import axios from "axios";
 
 const AVATAR_SVG = (
@@ -59,20 +59,28 @@ export default function ChatWidget() {
   return (
     <>
       {!open && (
-        <button
-          data-testid="chat-toggle-btn"
+        <div
+          data-testid="chat-toggle-wrap"
           onClick={() => setOpen(true)}
-          className="fixed bottom-5 right-5 z-40 w-14 h-14 rounded-full bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] shadow-2xl gold-glow flex items-center justify-center transition-transform hover:scale-105"
-          aria-label="Buka chat"
+          className="fixed bottom-3 right-3 z-[2147483647] flex items-center gap-2 bg-[#1a1d27]/95 backdrop-blur-md border border-white/10 h-12 pl-4 pr-1 rounded-full shadow-2xl cursor-pointer min-w-[220px] hover:bg-[#22262f] transition-colors"
         >
-          <MessageCircle size={24} strokeWidth={2.2} />
-        </button>
+          <Sparkles size={14} className="text-[#F5A623] flex-shrink-0" />
+          <span className="text-[13px] text-white/85 font-medium flex-1 select-none">Tanya CS · Chat kami</span>
+          <button
+            data-testid="chat-toggle-btn"
+            onClick={(e) => { e.stopPropagation(); setOpen(true); }}
+            className="w-10 h-10 rounded-full bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] shadow-lg gold-glow flex items-center justify-center transition-transform hover:scale-105 flex-shrink-0"
+            aria-label="Buka chat"
+          >
+            <MessageCircle size={20} strokeWidth={2.2} />
+          </button>
+        </div>
       )}
 
       {open && (
         <div
           data-testid="chat-widget"
-          className="fixed bottom-5 right-5 z-40 w-[calc(100vw-2.5rem)] sm:w-[380px] h-[540px] max-h-[80vh] bg-[#1a1d27] border border-white/10 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+          className="fixed bottom-3 right-3 z-[2147483647] w-[calc(100vw-1.5rem)] sm:w-[380px] h-[540px] max-h-[80vh] bg-[#1a1d27] border border-white/10 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
         >
           {/* Header */}
           <div className="flex items-center justify-between gap-3 p-3 border-b border-white/5 bg-[#0f1117]">
