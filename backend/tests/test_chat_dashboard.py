@@ -2,7 +2,7 @@
 import os
 import requests
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://repo-bootstrap-13.preview.emergentagent.com").rstrip("/")
+BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://rizky-web-build.preview.emergentagent.com").rstrip("/")
 API = f"{BASE_URL}/api"
 ADMIN_PWD = "Blokirsandi12"
 ADMIN_HEADERS = {"X-Admin-Password": ADMIN_PWD, "Content-Type": "application/json"}
