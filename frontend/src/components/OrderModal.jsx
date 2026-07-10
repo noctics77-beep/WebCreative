@@ -113,8 +113,11 @@ export default function OrderModal({ open, onClose, product, referral }) {
   const hasDiscount =
     product.discount_active && product.discount_price < product.original_price;
   const basePrice = hasDiscount ? product.discount_price : product.original_price;
+  // Support 2 tipe: loyalty (percentage) atau coupon voucher (percentage/nominal)
   const finalPrice = discountInfo?.valid
-    ? Math.round(basePrice * (1 - discountInfo.percentage / 100))
+    ? (discountInfo.discount_amount != null
+        ? Math.max(0, basePrice - discountInfo.discount_amount)
+        : Math.round(basePrice * (1 - (discountInfo.percentage || 0) / 100)))
     : basePrice;
 
   const validateCode = async () => {
@@ -123,17 +126,49 @@ export default function OrderModal({ open, onClose, product, referral }) {
       setDiscountInfo(null);
       return;
     }
+    // Coba coupon voucher admin dulu
     try {
-      const res = await api.get(`/discount/validate/${c}`);
+      const res = await api.post("/coupons/validate", {
+        code: c,
+        product_id: product.id,
+        total: basePrice,
+      });
       if (res.data.valid) {
-        setDiscountInfo(res.data);
-        toast.success(`Kode valid! Diskon ${res.data.percentage}%`);
+        setDiscountInfo({
+          valid: true,
+          code: c,
+          type: "coupon",
+          discount_amount: res.data.discount_amount,
+          discount_type: res.data.discount_type,
+          discount_value: res.data.discount_value,
+        });
+        const label = res.data.discount_type === "percentage"
+          ? `${res.data.discount_value}%`
+          : `Rp ${res.data.discount_amount.toLocaleString("id-ID")}`;
+        toast.success(`Voucher valid! Diskon ${label}`);
+        return;
+      }
+    } catch (couponErr) {
+      // Kalau coupon-endpoint reject, coba loyalty
+    }
+    // Fallback: loyalty discount code (10% off)
+    try {
+      const res2 = await api.get(`/discount/validate/${c}`);
+      if (res2.data.valid) {
+        setDiscountInfo({
+          valid: true,
+          code: c,
+          type: "loyalty",
+          percentage: res2.data.percentage,
+        });
+        toast.success(`Kode loyalty valid! Diskon ${res2.data.percentage}%`);
       } else {
         setDiscountInfo({ valid: false });
-        toast.error("Kode tidak valid atau sudah dipakai");
+        toast.error("Kode voucher tidak valid atau sudah expired ya, Sobat Creative 🥲");
       }
     } catch {
       setDiscountInfo({ valid: false });
+      toast.error("Kode voucher tidak valid atau sudah expired ya, Sobat Creative 🥲");
     }
   };
 
@@ -347,7 +382,7 @@ export default function OrderModal({ open, onClose, product, referral }) {
               )}
 
               <div>
-                <Label className="text-xs uppercase tracking-widest text-white/60">Kode Diskon (opsional)</Label>
+                <Label className="text-xs uppercase tracking-widest text-white/60">Kode Voucher / Diskon (opsional)</Label>
                 <div className="flex gap-2 mt-1">
                   <Input
                     data-testid="discount-code-input"
@@ -356,7 +391,7 @@ export default function OrderModal({ open, onClose, product, referral }) {
                       setForm({ ...form, discount_code: e.target.value });
                       setDiscountInfo(null);
                     }}
-                    placeholder="DISC-XXXXXX"
+                    placeholder="Masukkan kode voucher"
                     className="bg-[#0f1117] border-white/15 text-white placeholder:text-white/30 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623] uppercase font-mono"
                   />
                   <Button
@@ -370,7 +405,11 @@ export default function OrderModal({ open, onClose, product, referral }) {
                 </div>
                 {discountInfo?.valid && (
                   <p className="text-xs text-green-400 mt-1" data-testid="discount-applied">
-                    ✓ Diskon {discountInfo.percentage}% diterapkan
+                    ✓ {discountInfo.type === "coupon"
+                        ? (discountInfo.discount_type === "percentage"
+                            ? `Voucher ${discountInfo.discount_value}% diterapkan`
+                            : `Voucher Rp ${(discountInfo.discount_amount || 0).toLocaleString("id-ID")} diterapkan`)
+                        : `Kode loyalty ${discountInfo.percentage}% diterapkan`}
                   </p>
                 )}
               </div>

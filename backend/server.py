@@ -526,6 +526,31 @@ async def create_order(payload: OrderCreate):
         if code_doc:
             price = round(price * (1 - code_doc["percentage"] / 100), 2)
             await db.discount_codes.update_one({"code": code}, {"$set": {"used": True, "used_at": now_iso()}})
+        else:
+            # Cek apakah ini coupon voucher admin
+            coupon = await db.coupons.find_one({"code": code}, {"_id": 0})
+            if coupon and coupon.get("active"):
+                now = datetime.now(timezone.utc).isoformat()
+                # Basic validation
+                valid = True
+                if coupon.get("valid_from") and now < coupon["valid_from"]:
+                    valid = False
+                if coupon.get("valid_until") and now > coupon["valid_until"]:
+                    valid = False
+                if coupon.get("max_uses", 0) > 0 and int(coupon.get("uses_count", 0)) >= int(coupon["max_uses"]):
+                    valid = False
+                if price < float(coupon.get("min_purchase", 0)):
+                    valid = False
+                if coupon.get("applies_to") == "products" and product["id"] not in coupon.get("product_ids", []):
+                    valid = False
+                if valid:
+                    if coupon["discount_type"] == "percentage":
+                        discount = round(price * float(coupon["discount_value"]) / 100, 2)
+                    else:
+                        discount = float(coupon["discount_value"])
+                    price = max(0, round(price - discount, 2))
+                    # Increment uses_count
+                    await db.coupons.update_one({"code": code}, {"$inc": {"uses_count": 1}})
 
     referral = payload.referral_affiliate_code
     if referral:
