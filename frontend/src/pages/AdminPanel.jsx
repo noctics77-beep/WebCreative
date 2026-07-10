@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo, useRef } from "react";
 import { adminApi, formatIDR, downloadAdminFile, resolveImageUrl } from "@/lib/api";
+import { parseBulkImportText } from "@/lib/bulkImportParser";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -127,6 +128,7 @@ export default function AdminPanel() {
           <TabsTrigger value="reviews" data-testid="tab-reviews">Ulasan</TabsTrigger>
           <TabsTrigger value="faq" data-testid="tab-faq">FAQ</TabsTrigger>
           <TabsTrigger value="about" data-testid="tab-about">Tentang</TabsTrigger>
+          <TabsTrigger value="coupons" data-testid="tab-coupons">Kupon</TabsTrigger>
           <TabsTrigger value="orders" data-testid="tab-orders">Order</TabsTrigger>
           <TabsTrigger value="customers" data-testid="tab-customers">Pelanggan</TabsTrigger>
           <TabsTrigger value="affiliates" data-testid="tab-affiliates">Affiliate</TabsTrigger>
@@ -156,6 +158,9 @@ export default function AdminPanel() {
         </TabsContent>
         <TabsContent value="about" className="mt-6">
           <AboutTab api={api} />
+        </TabsContent>
+        <TabsContent value="coupons" className="mt-6">
+          <CouponsTab api={api} />
         </TabsContent>
         <TabsContent value="orders" className="mt-6">
           <OrdersTab api={api} />
@@ -209,6 +214,12 @@ function ProductsTab({ api }) {
     if (filter === "published") return p.publish_status !== "draft";
     if (filter === "draft") return p.publish_status === "draft";
     return true;
+  }).sort((a, b) => {
+    // Published dulu, lalu by display_order
+    const sA = a.publish_status === "draft" ? 1 : 0;
+    const sB = b.publish_status === "draft" ? 1 : 0;
+    if (sA !== sB) return sA - sB;
+    return (a.display_order || 999) - (b.display_order || 999);
   });
 
   const catNameMap = useMemo(() => {
@@ -222,6 +233,47 @@ function ProductsTab({ api }) {
     await api.delete(`/admin/products/${id}`);
     toast.success("Produk dihapus");
     load();
+  };
+
+  const movePriority = async (id, direction) => {
+    // Bergerak dalam urutan hasil filter published-first
+    const sorted = [...items].sort((a, b) => {
+      const sA = a.publish_status === "draft" ? 1 : 0;
+      const sB = b.publish_status === "draft" ? 1 : 0;
+      if (sA !== sB) return sA - sB;
+      return (a.display_order || 999) - (b.display_order || 999);
+    });
+    const idx = sorted.findIndex((p) => p.id === id);
+    if (idx < 0) return;
+    const newIdx = idx + direction;
+    if (newIdx < 0 || newIdx >= sorted.length) return;
+    // swap display_order — pastikan kalau salah satu draft dan lainnya published, tetap tidak lintas grup
+    if (sorted[idx].publish_status !== sorted[newIdx].publish_status) {
+      toast.error("Tidak bisa lintas grup Published/Draft");
+      return;
+    }
+    const orderA = sorted[idx].display_order || 999;
+    const orderB = sorted[newIdx].display_order || 999;
+    try {
+      await api.post("/admin/products/reorder", {
+        orders: [
+          { id: sorted[idx].id, display_order: orderB },
+          { id: sorted[newIdx].id, display_order: orderA },
+        ],
+      });
+      load();
+    } catch (e) {
+      toast.error("Gagal ubah urutan");
+    }
+  };
+
+  const resetOrder = async () => {
+    if (!confirm("Reset urutan sesuai tanggal ditambahkan (terbaru dulu)?")) return;
+    try {
+      const r = await api.post("/admin/products/reset-order");
+      toast.success(`Urutan direset (${r.data.reset} produk)`);
+      load();
+    } catch { toast.error("Gagal reset urutan"); }
   };
 
   const togglePublish = async (product) => {
@@ -309,6 +361,14 @@ function ProductsTab({ api }) {
           </div>
         </div>
         <div className="flex gap-2 flex-wrap">
+          <Button
+            data-testid="reset-order-btn"
+            variant="outline"
+            onClick={resetOrder}
+            className="bg-transparent border-white/15 hover:bg-white/5 text-white/70"
+          >
+            <RefreshCw size={13} className="mr-1" /> Reset Urutan
+          </Button>
           <Button
             data-testid="generate-info-btn"
             variant="outline"
@@ -472,6 +532,18 @@ function ProductsTab({ api }) {
                   </button>
                 </TableCell>
                 <TableCell className="text-right">
+                  <button
+                    data-testid={`move-up-${p.id}`}
+                    onClick={() => movePriority(p.id, -1)}
+                    className="p-1 rounded-md text-white/50 hover:bg-white/5 hover:text-[#F5A623]"
+                    title="Naikkan prioritas"
+                  >▲</button>
+                  <button
+                    data-testid={`move-down-${p.id}`}
+                    onClick={() => movePriority(p.id, +1)}
+                    className="p-1 rounded-md text-white/50 hover:bg-white/5 hover:text-[#F5A623]"
+                    title="Turunkan prioritas"
+                  >▼</button>
                   <button
                     data-testid={`edit-product-${p.id}`}
                     onClick={() => { setEditing(p); setOpen(true); }}
@@ -753,69 +825,102 @@ function parseBulkInput(raw) {
 
 function BulkImportDialog({ open, onOpenChange, api, onImported }) {
   const [raw, setRaw] = useState("");
-  const [preview, setPreview] = useState([]);
+  const [preview, setPreview] = useState([]);      // [{name, price}]
+  const [duplicates, setDuplicates] = useState({}); // {idx: {status, matched_name}}
+  const [keepDuplicates, setKeepDuplicates] = useState({}); // {idx: bool}
   const [busy, setBusy] = useState(false);
+  const [checking, setChecking] = useState(false);
 
   useEffect(() => {
-    const parsed = parseBulkInput(raw);
-    const seen = new Set();
-    const unique = [];
-    for (const name of parsed) {
-      const k = name.toLowerCase();
-      if (!seen.has(k)) {
-        seen.add(k);
-        unique.push(name);
-      }
-    }
-    setPreview(unique);
+    const parsed = parseBulkImportText(raw);
+    setPreview(parsed);
+    setDuplicates({});
+    setKeepDuplicates({});
   }, [raw]);
+
+  // Auto-check duplicates when preview changes
+  useEffect(() => {
+    if (preview.length === 0) return;
+    const t = setTimeout(async () => {
+      setChecking(true);
+      try {
+        const r = await api.post("/admin/products/check-duplicates", { items: preview });
+        const map = {};
+        r.data.items.forEach((it, idx) => {
+          if (it.status !== "new") {
+            map[idx] = { status: it.status, matched_name: it.matched_name };
+          }
+        });
+        setDuplicates(map);
+      } catch {} finally { setChecking(false); }
+    }, 500);
+    return () => clearTimeout(t);
+  }, [preview, api]);
 
   const removeItem = (idx) => setPreview((prev) => prev.filter((_, i) => i !== idx));
 
+  const skipAllDuplicates = () => {
+    const next = {};
+    Object.keys(duplicates).forEach((idx) => { next[idx] = false; });
+    setKeepDuplicates(next);
+  };
+
+  const importAllDuplicates = () => {
+    const next = {};
+    Object.keys(duplicates).forEach((idx) => { next[idx] = true; });
+    setKeepDuplicates(next);
+  };
+
   const submit = async () => {
-    if (preview.length === 0) {
-      toast.error("Belum ada nama produk untuk diimpor");
+    // Filter items: skip duplicates that are NOT explicitly kept
+    const finalItems = preview.filter((_, idx) => {
+      if (!duplicates[idx]) return true;
+      return keepDuplicates[idx] === true;
+    });
+    if (finalItems.length === 0) {
+      toast.error("Tidak ada produk untuk diimpor");
       return;
     }
     setBusy(true);
     try {
-      const res = await api.post("/admin/products/bulk-import", { names: preview });
+      const res = await api.post("/admin/products/bulk-import-v2", { items: finalItems });
       toast.success(`${res.data.created} produk berhasil ditambahkan`);
       setRaw("");
       onImported();
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Import gagal");
-    } finally {
-      setBusy(false);
-    }
+    } finally { setBusy(false); }
   };
+
+  const dupCount = Object.keys(duplicates).length;
+  const importCount = preview.filter((_, idx) => !duplicates[idx] || keepDuplicates[idx]).length;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         data-testid="bulk-import-dialog"
-        className="bg-[#1a1d27] border-white/10 text-white max-w-2xl max-h-[90vh] flex flex-col"
+        className="bg-[#1a1d27] border-white/10 text-white max-w-3xl max-h-[90vh] flex flex-col"
       >
         <DialogHeader>
           <DialogTitle className="font-display text-xl">Import Produk Massal</DialogTitle>
           <p className="text-xs text-white/55">
-            Tempel daftar nama produk (satu per baris). Prefix seperti{" "}
-            <code className="text-[#F5A623]">➥</code>, <code className="text-[#F5A623]">-</code>,{" "}
-            <code className="text-[#F5A623]">1.</code> akan otomatis dibersihkan. Duplikat diabaikan.
+            Format: <code className="text-[#F5A623]">Nama Produk | 150000</code>, atau{" "}
+            <code className="text-[#F5A623]">Nama Produk | 150rb</code>, atau nama saja.
+            Prefix <code>➥ - • * &gt; # + 1.</code> auto-strip.
           </p>
         </DialogHeader>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2 min-h-0 flex-1 overflow-hidden">
           <div className="flex flex-col min-h-0">
             <Label className="text-[11px] uppercase tracking-widest text-white/60 mb-1">
-              Daftar Nama Produk
+              Daftar Produk (nama | harga)
             </Label>
             <Textarea
               data-testid="bulk-input-textarea"
               value={raw}
               onChange={(e) => setRaw(e.target.value)}
-              placeholder={"➥ Netflix Premium 1 Bulan\n- Spotify Family\n1. Canva Pro\nDisney+ Hotstar"}
-              className="flex-1 min-h-[240px] bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623] font-mono text-xs resize-none"
+              placeholder={"➥ Netflix Premium | 45000\n- Spotify Family | Rp 50.000\n• Canva Pro | 150rb\n[ChatGPT Plus] | 99K\nDisney+ Hotstar"}
+              className="flex-1 min-h-[280px] bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623] font-mono text-xs resize-none"
             />
           </div>
 
@@ -823,52 +928,79 @@ function BulkImportDialog({ open, onOpenChange, api, onImported }) {
             <div className="flex items-center justify-between mb-1">
               <Label className="text-[11px] uppercase tracking-widest text-white/60">
                 Preview ({preview.length})
+                {checking && <Loader2 className="animate-spin inline ml-1" size={11} />}
               </Label>
-              {preview.length > 0 && (
-                <button
-                  type="button"
-                  data-testid="bulk-clear-preview"
-                  onClick={() => setRaw("")}
-                  className="text-[10px] text-white/50 hover:text-red-300"
-                >
-                  Bersihkan
-                </button>
+              {dupCount > 0 && (
+                <div className="flex gap-1">
+                  <button type="button" onClick={skipAllDuplicates}
+                    className="text-[10px] px-2 py-0.5 rounded border border-white/15 text-white/60 hover:bg-white/5">
+                    Skip Semua Duplikat
+                  </button>
+                  <button type="button" onClick={importAllDuplicates}
+                    className="text-[10px] px-2 py-0.5 rounded border border-[#F5A623]/40 text-[#F5A623] hover:bg-[#F5A623]/10">
+                    Import Semua Tetap
+                  </button>
+                </div>
               )}
             </div>
             <div
               data-testid="bulk-preview-list"
-              className="flex-1 min-h-[240px] max-h-[240px] overflow-y-auto rounded-md border border-white/10 bg-[#0f1117] p-1"
+              className="flex-1 min-h-[280px] max-h-[380px] overflow-y-auto rounded-md border border-white/10 bg-[#0f1117] p-1"
             >
               {preview.length === 0 ? (
                 <p className="text-xs text-white/40 text-center py-8 px-3">
                   Belum ada produk. Ketik atau tempel daftar di sebelah kiri.
                 </p>
               ) : (
-                <ul className="space-y-1">
-                  {preview.map((name, idx) => (
-                    <li
-                      key={`${idx}-${name}`}
-                      data-testid={`bulk-preview-item-${idx}`}
-                      className="flex items-center justify-between gap-2 px-2 py-1.5 rounded bg-[#1a1d27] border border-white/5 hover:border-[#F5A623]/30"
-                    >
-                      <span className="text-xs text-white/85 truncate">{name}</span>
-                      <button
-                        type="button"
-                        data-testid={`bulk-remove-item-${idx}`}
-                        onClick={() => removeItem(idx)}
-                        className="p-1 rounded hover:bg-red-500/15 text-white/40 hover:text-red-300"
-                        title="Hapus"
-                      >
-                        <X size={12} />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-[#0f1117]">
+                    <tr className="text-white/50 text-[10px]">
+                      <th className="text-left px-2 py-1">Nama</th>
+                      <th className="text-right px-2 py-1">Harga</th>
+                      <th className="w-6"></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {preview.map((it, idx) => {
+                      const dup = duplicates[idx];
+                      const bgCls = dup?.status === "exact" ? "bg-red-500/10 border-red-500/30" :
+                                    dup?.status === "similar" ? "bg-amber-500/10 border-amber-500/30" :
+                                    "bg-[#1a1d27] border-white/5";
+                      return (
+                        <tr key={idx} className={`border-b ${bgCls}`}>
+                          <td className="px-2 py-1.5">
+                            {dup && (
+                              <div className="flex items-center gap-1 mb-0.5">
+                                <input
+                                  type="checkbox"
+                                  checked={!!keepDuplicates[idx]}
+                                  onChange={(e) => setKeepDuplicates({ ...keepDuplicates, [idx]: e.target.checked })}
+                                  className="accent-[#F5A623]"
+                                />
+                                <span className={`text-[9px] uppercase font-bold ${dup.status === "exact" ? "text-red-300" : "text-amber-300"}`}>
+                                  {dup.status === "exact" ? `DUPLIKAT — sudah ada` : `MIRIP: ${dup.matched_name}`}
+                                </span>
+                              </div>
+                            )}
+                            <div className="text-white/85 truncate">{it.name}</div>
+                          </td>
+                          <td className="text-right px-2 py-1.5 text-white/70 whitespace-nowrap">
+                            {it.price > 0 ? `Rp ${it.price.toLocaleString("id-ID")}` : "-"}
+                          </td>
+                          <td className="px-1">
+                            <button onClick={() => removeItem(idx)} className="p-1 text-white/40 hover:text-red-300">
+                              <X size={11} />
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               )}
             </div>
-            <p className="text-[10px] text-white/40 mt-1.5 leading-relaxed">
-              Default tiap produk: harga 0, foto kosong, deskripsi kosong, komisi 10%, status tersedia.
-              Lengkapi via <b className="text-white/70">Edit Produk</b> setelah import.
+            <p className="text-[10px] text-white/50 mt-1.5">
+              Siap import <b className="text-[#F5A623]">{importCount}</b> produk baru, skip <b>{preview.length - importCount}</b> duplikat.
             </p>
           </div>
         </div>
@@ -3167,6 +3299,214 @@ function AboutTab({ api }) {
         </Button>
       </div>
     </div>
+  );
+}
+
+
+// ============================================================================
+// COUPONS TAB
+// ============================================================================
+function CouponsTab({ api }) {
+  const [items, setItems] = useState([]);
+  const [editing, setEditing] = useState(null);
+  const [open, setOpen] = useState(false);
+
+  const load = () => api.get("/admin/coupons").then((r) => setItems(r.data));
+  useEffect(() => { load(); }, []);
+
+  const remove = async (id) => {
+    if (!confirm("Hapus voucher ini?")) return;
+    await api.delete(`/admin/coupons/${id}`);
+    toast.success("Voucher dihapus");
+    load();
+  };
+
+  const toggleActive = async (c) => {
+    await api.put(`/admin/coupons/${c.id}`, { ...c, active: !c.active });
+    load();
+  };
+
+  return (
+    <div className="glass rounded-2xl p-6">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="font-display text-lg flex items-center gap-2">
+          <Tag size={18} className="text-[#F5A623]" /> Kupon & Voucher ({items.length})
+        </h3>
+        <Button data-testid="add-coupon-btn" onClick={() => { setEditing(null); setOpen(true); }}
+          className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold">
+          <Plus size={15} className="mr-1" /> Tambah Voucher
+        </Button>
+      </div>
+
+      <Table>
+        <TableHeader>
+          <TableRow className="border-white/10 hover:bg-transparent">
+            <TableHead className="text-white/60">Kode</TableHead>
+            <TableHead className="text-white/60">Tipe</TableHead>
+            <TableHead className="text-white/60">Nilai</TableHead>
+            <TableHead className="text-white/60">Min. Beli</TableHead>
+            <TableHead className="text-white/60">Kuota</TableHead>
+            <TableHead className="text-white/60">Berlaku</TableHead>
+            <TableHead className="text-white/60">Status</TableHead>
+            <TableHead className="text-white/60 text-right">Aksi</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {items.map((c) => (
+            <TableRow key={c.id} className="border-white/5">
+              <TableCell className="text-sm font-mono gold-text font-semibold">{c.code}</TableCell>
+              <TableCell className="text-xs text-white/70">{c.discount_type === "percentage" ? "Persen" : "Nominal"}</TableCell>
+              <TableCell className="text-sm">{c.discount_type === "percentage" ? `${c.discount_value}%` : formatIDR(c.discount_value)}</TableCell>
+              <TableCell className="text-xs">{c.min_purchase > 0 ? formatIDR(c.min_purchase) : "-"}</TableCell>
+              <TableCell className="text-xs">{c.max_uses === 0 ? "Unlimited" : `${c.uses_count}/${c.max_uses}`}</TableCell>
+              <TableCell className="text-xs text-white/60">
+                {c.valid_from ? new Date(c.valid_from).toLocaleDateString("id-ID") : "-"} → {c.valid_until ? new Date(c.valid_until).toLocaleDateString("id-ID") : "-"}
+              </TableCell>
+              <TableCell>
+                <button onClick={() => toggleActive(c)}
+                  className={`px-2 py-0.5 rounded-full text-[10px] border ${c.active ? "bg-green-500/15 text-green-300 border-green-500/30" : "bg-white/5 text-white/50 border-white/15"}`}>
+                  {c.active ? "Aktif" : "Nonaktif"}
+                </button>
+              </TableCell>
+              <TableCell className="text-right">
+                <button onClick={() => { setEditing(c); setOpen(true); }} className="p-2 rounded-md text-white/70 hover:bg-white/5 hover:text-[#F5A623]">
+                  <Edit size={15} />
+                </button>
+                <button onClick={() => remove(c.id)} className="p-2 rounded-md text-white/70 hover:bg-white/5 hover:text-red-400">
+                  <Trash2 size={15} />
+                </button>
+              </TableCell>
+            </TableRow>
+          ))}
+          {items.length === 0 && (
+            <TableRow><TableCell colSpan={8} className="text-center text-white/40 py-6">Belum ada voucher</TableCell></TableRow>
+          )}
+        </TableBody>
+      </Table>
+
+      {open && (
+        <CouponFormDialog
+          key={editing?.id || "new"}
+          open={open}
+          onOpenChange={setOpen}
+          editing={editing}
+          api={api}
+          onSaved={() => { setOpen(false); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function CouponFormDialog({ open, onOpenChange, editing, api, onSaved }) {
+  const [form, setForm] = useState(() => editing ? { ...editing, valid_from: editing.valid_from?.slice(0,10) || "", valid_until: editing.valid_until?.slice(0,10) || "" } : {
+    code: "",
+    discount_type: "percentage",
+    discount_value: 10,
+    min_purchase: 0,
+    max_uses: 0,
+    applies_to: "all",
+    product_ids: [],
+    valid_from: "",
+    valid_until: "",
+    active: true,
+  });
+  const [saving, setSaving] = useState(false);
+
+  const generateCode = () => {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let c = "";
+    for (let i = 0; i < 8; i++) c += chars[Math.floor(Math.random() * chars.length)];
+    setForm({ ...form, code: c });
+  };
+
+  const save = async (e) => {
+    e.preventDefault();
+    if (!form.code) return toast.error("Kode voucher wajib");
+    setSaving(true);
+    const payload = {
+      code: form.code,
+      discount_type: form.discount_type,
+      discount_value: parseFloat(form.discount_value || 0),
+      min_purchase: parseFloat(form.min_purchase || 0),
+      max_uses: parseInt(form.max_uses || 0, 10),
+      applies_to: form.applies_to,
+      product_ids: form.product_ids || [],
+      valid_from: form.valid_from ? new Date(form.valid_from).toISOString() : null,
+      valid_until: form.valid_until ? new Date(form.valid_until + "T23:59:59").toISOString() : null,
+      active: form.active,
+    };
+    try {
+      if (editing) await api.put(`/admin/coupons/${editing.id}`, payload);
+      else await api.post("/admin/coupons", payload);
+      toast.success(editing ? "Voucher diupdate" : "Voucher ditambahkan");
+      onSaved();
+    } catch (e) { toast.error(e?.response?.data?.detail || "Gagal simpan"); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-[#1a1d27] border-white/10 text-white sm:max-w-[540px] max-h-[90vh] overflow-y-auto">
+        <DialogHeader><DialogTitle className="font-display">{editing ? "Edit Voucher" : "Tambah Voucher"}</DialogTitle></DialogHeader>
+        <form onSubmit={save} className="space-y-3">
+          <Field label="Kode Voucher">
+            <div className="flex gap-2">
+              <Input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })} placeholder="HEMAT10"
+                className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623] font-mono uppercase" />
+              <Button type="button" onClick={generateCode} variant="outline" className="bg-transparent border-white/15 text-white/70 hover:bg-white/5">
+                Generate
+              </Button>
+            </div>
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Tipe Diskon">
+              <Select value={form.discount_type} onValueChange={(v) => setForm({ ...form, discount_type: v })}>
+                <SelectTrigger className="bg-[#0f1117] border-white/15"><SelectValue /></SelectTrigger>
+                <SelectContent className="bg-[#1a1d27] border-white/10 text-white">
+                  <SelectItem value="percentage">Persentase (%)</SelectItem>
+                  <SelectItem value="nominal">Nominal (Rp)</SelectItem>
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label={form.discount_type === "percentage" ? "Persen (%)" : "Nominal (Rp)"}>
+              <Input type="number" value={form.discount_value} onChange={(e) => setForm({ ...form, discount_value: e.target.value })}
+                className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]" />
+            </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Minimum Pembelian (Rp)">
+              <Input type="number" value={form.min_purchase} onChange={(e) => setForm({ ...form, min_purchase: e.target.value })}
+                className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]" />
+            </Field>
+            <Field label="Batas Penggunaan (0 = unlimited)">
+              <Input type="number" value={form.max_uses} onChange={(e) => setForm({ ...form, max_uses: e.target.value })}
+                className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]" />
+            </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Berlaku Dari">
+              <Input type="date" value={form.valid_from} onChange={(e) => setForm({ ...form, valid_from: e.target.value })}
+                className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]" />
+            </Field>
+            <Field label="Sampai Tanggal">
+              <Input type="date" value={form.valid_until} onChange={(e) => setForm({ ...form, valid_until: e.target.value })}
+                className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]" />
+            </Field>
+          </div>
+          <div className="flex items-center justify-between px-3 py-2 rounded-md bg-[#0f1117] border border-white/10">
+            <Label className="text-sm">Aktif</Label>
+            <Switch checked={form.active} onCheckedChange={(v) => setForm({ ...form, active: v })}
+              className="data-[state=checked]:bg-[#F5A623]" />
+          </div>
+          <DialogFooter>
+            <Button type="submit" disabled={saving} className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold">
+              {saving ? <Loader2 className="animate-spin" size={15} /> : "Simpan"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }
 

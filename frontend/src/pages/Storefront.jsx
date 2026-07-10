@@ -240,11 +240,11 @@ export default function Storefront() {
         </div>
 
         {loading ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {[...Array(6)].map((_, i) => (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-3">
+            {[...Array(8)].map((_, i) => (
               <div
                 key={i}
-                className="rounded-2xl bg-[#1a1d27] border border-white/5 h-[360px] animate-pulse"
+                className="rounded-xl bg-[#1a1d27] border border-white/5 aspect-[3/4] animate-pulse"
               />
             ))}
           </div>
@@ -265,7 +265,7 @@ export default function Storefront() {
             )}
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-3">
             {filteredProducts.map((p) => (
               <ProductCard
                 key={p.id}

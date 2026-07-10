@@ -3,63 +3,21 @@ import { highlightMatch } from "@/components/SearchBar";
 import StockBadge from "@/components/StockBadge";
 import { ShoppingBag, Bell, Flame, Zap, Sparkles, Tag, Hourglass } from "lucide-react";
 
-/**
- * Hitung badge otomatis berdasarkan data produk.
- * Return array of {key, label, icon, className}
- */
 function computeBadges(product) {
   const badges = [];
   const isDraft = product.publish_status === "draft";
-
   if (isDraft) {
-    badges.push({
-      key: "coming",
-      label: "Coming Soon",
-      icon: <Hourglass size={11} />,
-      className: "badge-coming",
-    });
-    return badges; // Coming Soon override lainnya
+    badges.push({ key: "coming", label: "Coming Soon", icon: <Hourglass size={9} />, className: "badge-coming" });
+    return badges;
   }
-
-  if (product.is_bestseller) {
-    badges.push({
-      key: "bestseller",
-      label: "Terlaris",
-      icon: <Flame size={11} />,
-      className: "badge-bestseller",
-    });
-  }
-  const hasDiscount =
-    product.discount_active && product.discount_price && product.discount_price < product.original_price;
-  if (hasDiscount) {
-    badges.push({
-      key: "flash",
-      label: "Flash Sale",
-      icon: <Zap size={11} />,
-      className: "badge-flash",
-    });
-  }
-  // BARU: created 7 hari terakhir
+  if (product.is_bestseller) badges.push({ key: "bs", label: "Terlaris", icon: <Flame size={9} />, className: "badge-bestseller" });
+  const hasDiscount = product.discount_active && product.discount_price && product.discount_price < product.original_price;
+  if (hasDiscount) badges.push({ key: "fs", label: "Flash", icon: <Zap size={9} />, className: "badge-flash" });
   if (product.created_at) {
-    const created = new Date(product.created_at);
-    const diffDays = (Date.now() - created.getTime()) / (1000 * 60 * 60 * 24);
-    if (diffDays >= 0 && diffDays <= 7) {
-      badges.push({
-        key: "new",
-        label: "Baru",
-        icon: <Sparkles size={11} />,
-        className: "badge-new",
-      });
-    }
+    const d = (Date.now() - new Date(product.created_at).getTime()) / (1000 * 60 * 60 * 24);
+    if (d >= 0 && d <= 7) badges.push({ key: "new", label: "Baru", icon: <Sparkles size={9} />, className: "badge-new" });
   }
-  if (product.is_promo) {
-    badges.push({
-      key: "promo",
-      label: "Promo",
-      icon: <Tag size={11} />,
-      className: "badge-promo",
-    });
-  }
+  if (product.is_promo) badges.push({ key: "pr", label: "Promo", icon: <Tag size={9} />, className: "badge-promo" });
   return badges;
 }
 
@@ -83,75 +41,78 @@ export default function ProductCard({ product, onOrder, onWaitlist, query }) {
         if (isDraft) onWaitlist && onWaitlist(product);
         else onOrder && onOrder(product);
       }}
-      className="glass hover-card-lift rounded-2xl overflow-hidden flex flex-col relative cursor-pointer"
+      className="glass hover-card-lift rounded-xl overflow-hidden flex flex-col relative cursor-pointer group"
     >
-      <div className="relative aspect-[4/3] overflow-hidden bg-[#0a0c12]">
+      {/* SQUARE photo 1:1 */}
+      <div className="relative aspect-square overflow-hidden bg-[#0a0c12]">
         <img
           src={resolveImageUrl(product.photo_url)}
           alt={product.name}
-          className={`w-full h-full object-cover ${isDraft ? "opacity-40" : ""}`}
+          className={`w-full h-full object-cover transition-transform duration-300 group-hover:scale-105 ${isDraft ? "opacity-40" : ""}`}
           onError={(e) => {
-            e.currentTarget.src =
-              "https://images.unsplash.com/photo-1625838144804-300f3907c110?w=800";
+            e.currentTarget.src = "https://images.unsplash.com/photo-1625838144804-300f3907c110?w=800";
           }}
         />
-        {/* Coming Soon overlay */}
         {isDraft && (
           <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/40 to-black/70" />
         )}
 
         {/* Badge stack pojok kiri atas */}
-        <div className="absolute top-3 left-3 flex flex-col gap-1.5 z-10">
+        <div className="absolute top-1.5 left-1.5 flex flex-col gap-1 z-10">
           {badges.map((b) => (
             <span
               key={b.key}
-              className={`badge-anim inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${b.className}`}
+              className={`badge-anim inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[8px] sm:text-[9px] font-bold uppercase tracking-wide ${b.className}`}
             >
               {b.icon} {b.label}
             </span>
           ))}
         </div>
 
-        {/* Stok habis overlay hanya jika bukan draft */}
         {!isDraft && !available && (
           <div className="absolute inset-0 bg-black/70 flex items-center justify-center">
-            <span className="px-3 py-1 rounded-full bg-white/10 text-white/90 text-xs uppercase tracking-widest">
+            <span className="px-2 py-0.5 rounded-full bg-white/10 text-white/90 text-[10px] uppercase tracking-widest">
               Stok Habis
             </span>
           </div>
         )}
       </div>
 
-      <div className="p-5 flex flex-col flex-1">
-        <h3 className="font-display text-lg text-white">
+      {/* Info compact */}
+      <div className="p-2 sm:p-2.5 flex flex-col flex-1">
+        <h3 className="text-xs sm:text-sm font-medium text-white line-clamp-2 leading-snug min-h-[2.5em]">
           {query ? highlightMatch(product.name, query) : product.name}
         </h3>
+
         {!isDraft && product.monthly_sold > 0 && (
           <div
             data-testid={`monthly-sold-${product.id}`}
-            className="text-sm text-[#F5A623] font-medium mt-1 flex items-center gap-1"
+            className="text-[10px] text-[#F5A623] font-medium mt-0.5 flex items-center gap-0.5"
           >
-            🔥 {product.monthly_sold} terjual bulan ini
+            🔥 {product.monthly_sold} terjual
           </div>
         )}
-        {!isDraft && <div className="mt-1"><StockBadge product={product} /></div>}
-        <p className="text-sm text-white/55 mt-1 line-clamp-2 flex-1">
-          {query ? highlightMatch(product.description, query) : product.description}
-        </p>
-        <div className="mt-4 flex items-end justify-between">
-          <div>
+        {!isDraft && <div className="mt-0.5"><StockBadge product={product} /></div>}
+
+        {product.description && (
+          <p className="text-[10px] text-white/45 mt-0.5 line-clamp-1">
+            {query ? highlightMatch(product.description, query) : product.description}
+          </p>
+        )}
+
+        {/* Price + button row */}
+        <div className="mt-1.5 flex items-end justify-between gap-1">
+          <div className="min-w-0 flex-1">
             {isDraft ? (
-              <div className="text-lg font-display font-semibold text-white/70 italic">
-                Segera Hadir
-              </div>
+              <div className="text-xs font-display italic text-white/70">Segera Hadir</div>
             ) : (
               <>
                 {hasDiscount && (
-                  <div className="text-xs text-white/40 line-through">
+                  <div className="text-[10px] text-white/40 line-through leading-none">
                     {formatIDR(product.original_price)}
                   </div>
                 )}
-                <div className="text-xl font-display font-semibold gold-text">
+                <div className="text-sm sm:text-base font-display font-semibold gold-text leading-tight">
                   {formatIDR(finalPrice)}
                 </div>
               </>
@@ -161,18 +122,20 @@ export default function ProductCard({ product, onOrder, onWaitlist, query }) {
             <button
               data-testid={`notify-me-btn-${product.id}`}
               onClick={(e) => { e.stopPropagation(); onWaitlist && onWaitlist(product); }}
-              className="inline-flex items-center gap-2 bg-white/10 hover:bg-white/20 border border-white/20 text-white/90 text-sm font-medium px-4 py-2 rounded-full transition-colors"
+              className="flex-shrink-0 w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 text-white/90 flex items-center justify-center transition-colors"
+              aria-label="Beritahu saya"
             >
-              <Bell size={15} /> Beritahu Saya
+              <Bell size={13} />
             </button>
           ) : (
             <button
               data-testid={`order-now-btn-${product.id}`}
               disabled={!available}
               onClick={(e) => { e.stopPropagation(); onOrder(product); }}
-              className="inline-flex items-center gap-2 bg-[#F5A623] disabled:bg-white/10 disabled:text-white/40 hover:bg-[#d98f1a] text-[#0f1117] text-sm font-semibold px-4 py-2 rounded-full transition-colors"
+              className="flex-shrink-0 w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-[#F5A623] disabled:bg-white/10 disabled:text-white/40 hover:bg-[#d98f1a] text-[#0f1117] flex items-center justify-center transition-colors shadow-md"
+              aria-label={stockOut ? "Stok Habis" : "Pesan"}
             >
-              <ShoppingBag size={15} /> {stockOut ? "Stok Habis" : "Pesan"}
+              <ShoppingBag size={13} />
             </button>
           )}
         </div>

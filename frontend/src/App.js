@@ -19,6 +19,7 @@ import About from "@/pages/About";
 import NavBar from "@/components/NavBar";
 import Footer from "@/components/Footer";
 import ChatWidget from "@/components/ChatWidget";
+import WelcomePopup from "@/components/WelcomePopup";
 import { initTracking, trackPageView } from "@/lib/tracking";
 
 function RouteTracker() {
@@ -52,6 +53,7 @@ export default function App() {
         </Routes>
         <Footer />
         <ChatWidget />
+        <WelcomePopup />
       </BrowserRouter>
       <Toaster
         theme="dark"

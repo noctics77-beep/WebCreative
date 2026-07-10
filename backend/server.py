@@ -182,6 +182,7 @@ class Product(BaseModel):
     stock_limit_enabled: bool = False  # jika True, gunakan stock_quantity
     stock_quantity: int = 0  # sisa slot (relevan hanya jika stock_limit_enabled)
     slug: str = ""  # slug untuk URL /produk/[slug]
+    display_order: int = 999  # urutan tampil admin (kecil = atas)
     created_at: str = Field(default_factory=now_iso)
 
 
@@ -201,6 +202,7 @@ class ProductCreate(BaseModel):
     is_promo: bool = False
     stock_limit_enabled: bool = False
     stock_quantity: int = 0
+    display_order: int = 999
 
 
 class Category(BaseModel):
@@ -401,14 +403,25 @@ class StatusUpdate(BaseModel):
 # ---------- Public: Products ----------
 @api_router.get("/products")
 async def list_products():
-    # Ambil setting show_coming_soon (default True)
     stg = await db.settings.find_one({"id": "stats"}, {"_id": 0}) or {}
     show_coming_soon = stg.get("show_coming_soon", True)
     if show_coming_soon:
         query = {}
     else:
         query = {"publish_status": {"$ne": "draft"}}
-    products = await db.products.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    # Aggregate agar bisa sort: published dulu, lalu by display_order, lalu by created_at desc
+    pipeline = [
+        {"$match": query},
+        {"$addFields": {
+            "_status_priority": {
+                "$cond": [{"$eq": ["$publish_status", "published"]}, 0, 1]
+            },
+            "_display_order": {"$ifNull": ["$display_order", 999]}
+        }},
+        {"$sort": {"_status_priority": 1, "_display_order": 1, "created_at": -1}},
+        {"$project": {"_id": 0, "_status_priority": 0, "_display_order": 0}},
+    ]
+    products = await db.products.aggregate(pipeline).to_list(1000)
     return products
 
 
@@ -804,13 +817,56 @@ class BulkImportPayload(BaseModel):
     names: List[str]
 
 
+class BulkImportItem(BaseModel):
+    name: str
+    price: float = 0.0
+
+
+class BulkImportFullPayload(BaseModel):
+    items: List[BulkImportItem]
+
+
+class ReorderPayload(BaseModel):
+    orders: List[dict]  # [{id, display_order}]
+
+
+class Coupon(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    code: str  # unique, uppercased
+    discount_type: str = "percentage"  # percentage | nominal
+    discount_value: float = 0.0
+    min_purchase: float = 0.0
+    max_uses: int = 0  # 0 = unlimited
+    uses_count: int = 0
+    applies_to: str = "all"  # all | products
+    product_ids: List[str] = []
+    valid_from: Optional[str] = None  # ISO date
+    valid_until: Optional[str] = None  # ISO date
+    active: bool = True
+    created_at: str = Field(default_factory=now_iso)
+
+
+class CouponCreate(BaseModel):
+    code: str
+    discount_type: str = "percentage"
+    discount_value: float = 0.0
+    min_purchase: float = 0.0
+    max_uses: int = 0
+    applies_to: str = "all"
+    product_ids: List[str] = []
+    valid_from: Optional[str] = None
+    valid_until: Optional[str] = None
+    active: bool = True
+
+
 @api_router.post("/admin/products/bulk-import")
 async def admin_bulk_import_products(
     payload: BulkImportPayload,
     x_admin_password: Optional[str] = Header(None),
 ):
+    """Legacy: Import via names only (backward compat)."""
     await verify_admin(x_admin_password)
-    # Sanitize and deduplicate while preserving order
     seen: set = set()
     cleaned: list = []
     for raw in payload.names:
@@ -828,27 +884,135 @@ async def admin_bulk_import_products(
     if not cleaned:
         raise HTTPException(400, "Tidak ada nama produk valid")
 
-    docs = [
-        Product(
-            name=n,
-            photo_url="",
-            original_price=0,
-            discount_price=None,
-            discount_active=False,
-            description="",
-            commission_percent=10.0,
-            stock_status="available",
-            monthly_sold=0,
-            publish_status="draft",
-            category="lainnya",
-        ).model_dump()
-        for n in cleaned
-    ]
+    # Get max display_order untuk assign yang terbaru ke belakang
+    last = await db.products.find_one(
+        {}, {"_id": 0, "display_order": 1}, sort=[("display_order", -1)]
+    )
+    base_order = int(last.get("display_order", 999) if last else 999) + 1
+
+    docs = []
+    for i, n in enumerate(cleaned):
+        slug = await _generate_unique_slug(n)
+        docs.append(Product(
+            name=n, photo_url="", original_price=0, discount_price=None,
+            discount_active=False, description="", commission_percent=10.0,
+            stock_status="available", monthly_sold=0, publish_status="draft",
+            category="lainnya", slug=slug, display_order=base_order + i,
+        ).model_dump())
     await db.products.insert_many(docs)
-    # insert_many mutates docs to add ObjectId _id — strip before returning
     for d in docs:
         d.pop("_id", None)
     return {"created": len(docs), "products": docs}
+
+
+@api_router.post("/admin/products/bulk-import-v2")
+async def admin_bulk_import_v2(
+    payload: BulkImportFullPayload,
+    x_admin_password: Optional[str] = Header(None),
+):
+    """New: Import dengan nama + harga per item."""
+    await verify_admin(x_admin_password)
+    if not payload.items:
+        raise HTTPException(400, "Tidak ada item untuk diimport")
+
+    last = await db.products.find_one(
+        {}, {"_id": 0, "display_order": 1}, sort=[("display_order", -1)]
+    )
+    base_order = int(last.get("display_order", 999) if last else 999) + 1
+
+    docs = []
+    for i, item in enumerate(payload.items):
+        name = item.name.strip()
+        if not name:
+            continue
+        slug = await _generate_unique_slug(name)
+        docs.append(Product(
+            name=name, photo_url="", original_price=float(item.price or 0),
+            discount_price=None, discount_active=False, description="",
+            commission_percent=10.0, stock_status="available", monthly_sold=0,
+            publish_status="draft", category="lainnya", slug=slug,
+            display_order=base_order + i,
+        ).model_dump())
+
+    if not docs:
+        raise HTTPException(400, "Tidak ada item valid")
+    await db.products.insert_many(docs)
+    for d in docs:
+        d.pop("_id", None)
+    return {"created": len(docs), "products": docs}
+
+
+@api_router.post("/admin/products/check-duplicates")
+async def admin_check_duplicates(
+    payload: BulkImportFullPayload,
+    x_admin_password: Optional[str] = Header(None),
+):
+    """Cek nama produk yang akan diimport terhadap existing. Return status per item."""
+    await verify_admin(x_admin_password)
+    existing = await db.products.find({}, {"_id": 0, "name": 1}).to_list(2000)
+    existing_lower = {p["name"].lower().strip(): p["name"] for p in existing}
+
+    def similarity(a: str, b: str) -> float:
+        # Simple Jaccard similarity on word tokens
+        aw = set(a.lower().split())
+        bw = set(b.lower().split())
+        if not aw or not bw:
+            return 0.0
+        return len(aw & bw) / len(aw | bw)
+
+    result = []
+    for item in payload.items:
+        n = item.name.strip()
+        if not n:
+            continue
+        key = n.lower()
+        status = "new"
+        matched_name = None
+        if key in existing_lower:
+            status = "exact"
+            matched_name = existing_lower[key]
+        else:
+            # find similar
+            for k, v in existing_lower.items():
+                if similarity(key, k) > 0.8:
+                    status = "similar"
+                    matched_name = v
+                    break
+        result.append({
+            "name": n,
+            "price": float(item.price or 0),
+            "status": status,
+            "matched_name": matched_name,
+        })
+    return {"items": result}
+
+
+@api_router.post("/admin/products/reorder")
+async def admin_reorder_products(
+    payload: ReorderPayload,
+    x_admin_password: Optional[str] = Header(None),
+):
+    """Bulk-update display_order for products."""
+    await verify_admin(x_admin_password)
+    updated = 0
+    for o in payload.orders:
+        pid = o.get("id")
+        order = int(o.get("display_order", 999))
+        if not pid:
+            continue
+        r = await db.products.update_one({"id": pid}, {"$set": {"display_order": order}})
+        updated += r.modified_count
+    return {"updated": updated}
+
+
+@api_router.post("/admin/products/reset-order")
+async def admin_reset_order(x_admin_password: Optional[str] = Header(None)):
+    """Reset display_order sesuai tanggal ditambahkan (terbaru dulu → order kecil)."""
+    await verify_admin(x_admin_password)
+    products = await db.products.find({}, {"_id": 0, "id": 1, "created_at": 1}).sort("created_at", -1).to_list(2000)
+    for i, p in enumerate(products, 1):
+        await db.products.update_one({"id": p["id"]}, {"$set": {"display_order": i}})
+    return {"reset": len(products)}
 
 
 @api_router.put("/admin/products/{product_id}")
@@ -957,6 +1121,12 @@ async def admin_update_order_status(order_id: str, payload: StatusUpdate, x_admi
         raise HTTPException(400, "Order sudah diproses")
 
     await db.orders.update_one({"id": order_id}, {"$set": {"status": payload.status}})
+
+    # === NOTIF KE PEMBELI via Bot Publik (jika chat_id tersimpan) ===
+    try:
+        await _notify_buyer_order_status(order, payload.status)
+    except Exception as e:
+        logger.error(f"Notify buyer order status failed: {e}")
 
     # If confirmed: decrement stock (kalau stock_limit_enabled) & add commission
     if payload.status == "confirmed":
@@ -2297,6 +2467,162 @@ async def admin_update_about(payload: AboutUpdate, x_admin_password: Optional[st
     data = {"id": "about", **payload.model_dump()}
     await db.about.update_one({"id": "about"}, {"$set": data}, upsert=True)
     return data
+
+
+# =============================================================================
+# NOTIF PEMBELI SAAT STATUS ORDER BERUBAH (Bot Publik)
+# =============================================================================
+
+async def _find_buyer_telegram_chat_id(contact: str) -> Optional[str]:
+    """Coba cari telegram_chat_id dari waitlist untuk kontak yang cocok."""
+    if not contact:
+        return None
+    contact = contact.strip()
+    # Cari waitlist entry dengan wa/tele match
+    w = await db.waitlist.find_one(
+        {"whatsapp_telegram": contact, "telegram_chat_id": {"$exists": True, "$ne": None}},
+        {"_id": 0, "telegram_chat_id": 1},
+    )
+    if w and w.get("telegram_chat_id"):
+        return w["telegram_chat_id"]
+    return None
+
+
+async def _notify_buyer_order_status(order: dict, new_status: str):
+    """Kirim notif ke pembeli via bot publik jika chat_id ditemukan."""
+    if not TELEGRAM_PUBLIC_BOT_TOKEN:
+        return
+    chat_id = await _find_buyer_telegram_chat_id(order.get("contact", ""))
+    if not chat_id:
+        return  # skip gracefully
+
+    name = order.get("buyer_name", "Sobat Creative")
+    product = order.get("product_name", "-")
+    order_code = order.get("order_code", order.get("id", "-"))
+    store_url = PUBLIC_STORE_URL
+
+    if new_status == "confirmed":
+        msg = (
+            f"✅ <b>Pesanan Dikonfirmasi!</b>\n\n"
+            f"Halo {name}! Pembayaran kamu sudah kami terima dan pesanan sedang diproses.\n\n"
+            f"🛍️ <b>Produk:</b> {product}\n"
+            f"📋 <b>Order ID:</b> {order_code}\n\n"
+            f"Kami akan segera mengirimkan produkmu via WhatsApp/Telegram. "
+            f"Tunggu sebentar ya, Sobat Creative! 💛\n\n"
+            f"— Tim CreativeStore\n"
+            f"🌐 {store_url}"
+        )
+    elif new_status == "completed" or new_status == "selesai":
+        msg = (
+            f"🎉 <b>Pesanan Selesai!</b>\n\n"
+            f"Halo {name}! Produk kamu sudah dikirimkan. Selamat menikmati ya!\n\n"
+            f"🛍️ <b>Produk:</b> {product}\n"
+            f"📋 <b>Order ID:</b> {order_code}\n\n"
+            f"Puas dengan pelayanan kami? Yuk kasih ulasan di halaman Lacak Pesanan 💫\n\n"
+            f"— Tim CreativeStore\n"
+            f"🌐 {store_url}"
+        )
+    elif new_status == "cancelled":
+        msg = (
+            f"❌ <b>Pesanan Dibatalkan</b>\n\n"
+            f"Halo {name}, pesanan kamu dengan Order ID <b>{order_code}</b> telah dibatalkan.\n\n"
+            f"Jika ada pertanyaan, hubungi kami langsung via WhatsApp/Telegram ya, Sobat Creative.\n\n"
+            f"— Tim CreativeStore\n"
+            f"🌐 {store_url}"
+        )
+    else:
+        return
+
+    await send_public_telegram(chat_id, msg)
+
+
+# =============================================================================
+# COUPONS ENDPOINTS
+# =============================================================================
+
+@api_router.get("/admin/coupons")
+async def admin_list_coupons(x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    return await db.coupons.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+
+
+@api_router.post("/admin/coupons")
+async def admin_create_coupon(payload: CouponCreate, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    data = payload.model_dump()
+    data["code"] = data["code"].strip().upper()
+    if not data["code"]:
+        raise HTTPException(400, "Kode voucher tidak boleh kosong")
+    exist = await db.coupons.find_one({"code": data["code"]}, {"_id": 0})
+    if exist:
+        raise HTTPException(400, "Kode voucher sudah ada")
+    c = Coupon(**data)
+    await db.coupons.insert_one(c.model_dump())
+    return c.model_dump()
+
+
+@api_router.put("/admin/coupons/{coupon_id}")
+async def admin_update_coupon(coupon_id: str, payload: CouponCreate, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    data = payload.model_dump()
+    data["code"] = data["code"].strip().upper()
+    await db.coupons.update_one({"id": coupon_id}, {"$set": data})
+    return await db.coupons.find_one({"id": coupon_id}, {"_id": 0})
+
+
+@api_router.delete("/admin/coupons/{coupon_id}")
+async def admin_delete_coupon(coupon_id: str, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    r = await db.coupons.delete_one({"id": coupon_id})
+    return {"deleted": r.deleted_count}
+
+
+@api_router.post("/coupons/validate")
+async def validate_coupon(request: Request):
+    """Public: validate coupon code untuk order flow. Return diskon."""
+    body = await request.json()
+    code = (body.get("code") or "").strip().upper()
+    product_id = body.get("product_id")
+    total = float(body.get("total") or 0)
+
+    if not code:
+        raise HTTPException(400, "Kode voucher tidak boleh kosong")
+
+    coupon = await db.coupons.find_one({"code": code}, {"_id": 0})
+    if not coupon or not coupon.get("active"):
+        raise HTTPException(400, "Kode voucher tidak valid atau sudah expired ya, Sobat Creative 🥲")
+
+    now = datetime.now(timezone.utc).isoformat()
+    if coupon.get("valid_from") and now < coupon["valid_from"]:
+        raise HTTPException(400, "Kode voucher belum aktif")
+    if coupon.get("valid_until") and now > coupon["valid_until"]:
+        raise HTTPException(400, "Kode voucher tidak valid atau sudah expired ya, Sobat Creative 🥲")
+
+    if coupon.get("max_uses", 0) > 0 and int(coupon.get("uses_count", 0)) >= int(coupon["max_uses"]):
+        raise HTTPException(400, "Kode voucher sudah mencapai batas penggunaan")
+
+    if total < float(coupon.get("min_purchase", 0)):
+        raise HTTPException(400, f"Minimum pembelian Rp {int(coupon['min_purchase']):,}")
+
+    if coupon.get("applies_to") == "products":
+        if not product_id or product_id not in coupon.get("product_ids", []):
+            raise HTTPException(400, "Voucher ini tidak berlaku untuk produk ini")
+
+    # Hitung diskon
+    if coupon["discount_type"] == "percentage":
+        discount = int(total * float(coupon["discount_value"]) / 100)
+    else:
+        discount = int(coupon["discount_value"])
+    discount = min(discount, int(total))
+
+    return {
+        "valid": True,
+        "code": coupon["code"],
+        "discount_type": coupon["discount_type"],
+        "discount_value": coupon["discount_value"],
+        "discount_amount": discount,
+        "final_total": max(0, int(total) - discount),
+    }
 
 
 app.include_router(api_router)
