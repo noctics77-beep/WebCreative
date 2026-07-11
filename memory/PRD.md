@@ -36,6 +36,33 @@ Import GitHub repo `https://github.com/noctics77-beep/WebCreative` (branch: main
 - [x] Cosmetic fix: removed duplicate "Rp Rp" prefix on Dashboard stat cards
 - [x] Regression suite `/app/backend/tests/test_new_features.py` — 26/26 PASS
 
+### Iteration 3+ (Feb 24 – Jul 11, 2026)
+- [x] Product Statuses (PUBLISHED/DRAFT) + Telegram Waitlist for draft products
+- [x] Categories, Product Badges, Storefront Search Bar
+- [x] Gemini 2.5 Flash "Generate Product Info" (admin)
+- [x] Product Detail Pages (`/produk/:slug`) + Stock Limits
+- [x] Rating & Reviews (customer + admin moderation)
+- [x] Share Buttons + Referral CTA card
+- [x] FAQ page, About Us page, Footer redesign, Trust Badges
+- [x] Fix duplicate Telegram daily summary via `db.job_locks` idempotency lock
+- [x] Admin Product Reordering (drag/index) + Bulk Import v2 (price parsing + duplicate detection)
+- [x] Telegram order status notifications to buyers (public webhook)
+- [x] Coupon/Voucher CRUD (percentage & nominal) + validation endpoint
+- [x] Welcome Popup + Responsive 2/3/4 column grid
+- [x] Chat widget CSS fix (no overlap with Made-with-Emergent watermark)
+
+### Iteration 7 (Jul 11, 2026) — Coupon + Loyalty Wiring
+- [x] **Unified discount field in OrderModal** — single "Kode Voucher / Diskon" field with sequential validation:
+  1. Try `POST /api/coupons/validate` (admin coupon)
+  2. Fallback to `GET /api/discount/validate/{code}` (loyalty code)
+  3. Both fail → exact copy: *"Kode tidak valid atau sudah expired ya, Sobat Creative 😢"*
+- [x] Dual discount display: (a) green badge with "hemat Rp X" + Hapus button, and (b) subtotal → diskon → total price breakdown row
+- [x] "Hapus" button to clear applied discount and reset total
+- [x] Loading state on "Pakai" button (spinner while validating)
+- [x] Guarded empty photo_url in OrderModal to avoid React img warning
+- [x] Frontend testing_agent_v3_fork iteration_6: **100% PASS (6/6 scenarios)**
+
+
 ## Verification Status (Feb 22, 2026)
 - Backend pytest: **54/54 PASS** (28 prior + 26 new)
 - Frontend e2e (testing_agent_v3_fork iteration_3): **100% PASS** after Rp Rp fix

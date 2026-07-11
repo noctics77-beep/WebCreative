@@ -289,13 +289,20 @@ export default function OrderModal({ open, onClose, product, referral }) {
                 data-testid="order-product-summary"
                 className="flex gap-3 items-start p-3 rounded-xl bg-[#22262f] border border-[#F5A623]/25"
               >
-                {product.photo_url && (
+                {product.photo_url ? (
                   <img
                     src={resolveImageUrl(product.photo_url)}
                     alt={product.name}
                     data-testid="order-product-thumb"
                     className="w-20 h-20 rounded-lg object-cover flex-shrink-0 border border-white/5"
                   />
+                ) : (
+                  <div
+                    data-testid="order-product-thumb-placeholder"
+                    className="w-20 h-20 rounded-lg flex-shrink-0 border border-white/5 bg-white/5 flex items-center justify-center text-white/30 text-xs"
+                  >
+                    No image
+                  </div>
                 )}
                 <div className="min-w-0 flex-1">
                   <p
