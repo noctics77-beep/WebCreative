@@ -4134,9 +4134,12 @@ function BannerFormDialog({ open, onOpenChange, editing, api, onSaved }) {
           <DialogTitle className="font-display">{editing ? "Edit Banner" : "Tambah Banner"}</DialogTitle>
         </DialogHeader>
         <form onSubmit={save} className="space-y-3">
-          <Field label="URL Gambar Banner">
-            <Input data-testid="bf-image" value={form.image_url} onChange={(e) => setForm({ ...form, image_url: e.target.value })}
-              placeholder="https://…" className="bg-[#0f1117] border-white/15" />
+          <Field label="Gambar Banner">
+            <PhotoPicker
+              value={form.image_url}
+              onChange={(url) => setForm({ ...form, image_url: url })}
+              api={api}
+            />
           </Field>
           <Field label="Judul Banner">
             <Input data-testid="bf-title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })}
