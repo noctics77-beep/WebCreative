@@ -1,17 +1,21 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { X, Sparkles, ArrowRight } from "lucide-react";
 
 const STORAGE_KEY = "cs_visited";
 
 export default function WelcomePopup() {
   const [open, setOpen] = useState(false);
+  const location = useLocation();
 
   useEffect(() => {
+    // Skip popup on admin & tracking pages to avoid blocking login / status views
+    if (location.pathname.startsWith("/admin") || location.pathname.startsWith("/lacak-pesanan")) return;
     const visited = localStorage.getItem(STORAGE_KEY);
     if (visited) return;
     const t = setTimeout(() => setOpen(true), 2000);
     return () => clearTimeout(t);
-  }, []);
+  }, [location.pathname]);
 
   const close = () => {
     localStorage.setItem(STORAGE_KEY, "1");

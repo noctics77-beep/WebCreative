@@ -63,6 +63,21 @@ Import GitHub repo `https://github.com/noctics77-beep/WebCreative` (branch: main
 - [x] Frontend testing_agent_v3_fork iteration_6: **100% PASS (6/6 scenarios)**
 
 
+### Iteration 8 (Jul 11, 2026) — 7-Feature Batch Drop
+- [x] **#1 Fix Foto Produk URL** — added `_normalize_photo_url()` on backend (auto-convert Google Drive share-link → `lh3.googleusercontent.com/d/{id}`, Dropbox `?dl=0` → `?raw=1`). Frontend PhotoPicker: red "Gagal Memuat" preview state + helper tip about direct image URLs. Also fixed React empty-src warning in ProductCard.
+- [x] **#2 History Pembeli** — renamed Customers tab; added tier badges (Baru/Reguler/Setia), favorite product, first_order_at, last_order_at, order timeline in detail dialog, per-customer CSV export.
+- [x] **#3 Notif Stok Menipis** — `_check_and_notify_low_stock()` triggered on paid orders (both Pakasir auto & admin manual confirm). Idempotent via `low_stock_alerted_at` / `out_of_stock_alerted_at` fields, reset when admin refills stock >5.
+- [x] **#4 Slider/Banner Promo** — Banner CRUD API + Admin "Banner Promo" tab with grid preview, active toggle, drag-order. Storefront `<BannerSlider>` with auto-play 4s, arrows, dots, swipe support, infinite loop. Default banner seeded on startup.
+- [x] **#5 Halaman Konfirmasi Visual** — `canvas-confetti` burst on success step + big animated checkmark + order details card (Order ID with copy, product, total, method) + "Lacak Pesanan" / "Kembali ke Toko" CTA + existing referral card.
+- [x] **#6 Mode Maintenance** — `/api/maintenance` GET (public) + `/api/admin/maintenance` PUT. `<MaintenanceGate>` wraps app, blocks all non-`/admin` routes when enabled.
+- [x] **#7 Statistik Pengunjung** — `/api/track/page-view` (bot-UA filtered) + `/api/admin/visitor-stats` (today/week/month + 7-day chart + top pages + top products via /produk/:slug tracking). Dashboard `VisitorStatsPanel`.
+- [x] Bonus UX: WelcomePopup skipped on /admin & /lacak-pesanan; fixed React empty-src warning.
+- [x] Testing_agent_v3_fork iteration_7: **Backend 93% (14/15), Frontend 100%**.
+
+## Pending User Action
+- 🚀 User must **Save to GitHub + Redeploy** production (`creativestore.my.id`) to apply all changes.
+
+
 ## Verification Status (Feb 22, 2026)
 - Backend pytest: **54/54 PASS** (28 prior + 26 new)
 - Frontend e2e (testing_agent_v3_fork iteration_3): **100% PASS** after Rp Rp fix

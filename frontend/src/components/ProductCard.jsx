@@ -46,7 +46,7 @@ export default function ProductCard({ product, onOrder, onWaitlist, query }) {
       {/* SQUARE photo 1:1 */}
       <div className="relative aspect-square overflow-hidden bg-[#0a0c12]">
         <img
-          src={resolveImageUrl(product.photo_url)}
+          src={resolveImageUrl(product.photo_url) || "https://images.unsplash.com/photo-1625838144804-300f3907c110?w=800"}
           alt={product.name}
           className={`w-full h-full object-cover transition-transform duration-300 group-hover:scale-105 ${isDraft ? "opacity-40" : ""}`}
           onError={(e) => {
