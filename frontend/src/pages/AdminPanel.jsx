@@ -130,11 +130,13 @@ export default function AdminPanel() {
           <TabsTrigger value="about" data-testid="tab-about">Tentang</TabsTrigger>
           <TabsTrigger value="coupons" data-testid="tab-coupons">Kupon</TabsTrigger>
           <TabsTrigger value="orders" data-testid="tab-orders">Order</TabsTrigger>
-          <TabsTrigger value="customers" data-testid="tab-customers">Pelanggan</TabsTrigger>
+          <TabsTrigger value="customers" data-testid="tab-customers">History Pembeli</TabsTrigger>
+          <TabsTrigger value="banners" data-testid="tab-banners">Banner Promo</TabsTrigger>
           <TabsTrigger value="affiliates" data-testid="tab-affiliates">Affiliate</TabsTrigger>
           <TabsTrigger value="withdrawals" data-testid="tab-withdrawals">WD</TabsTrigger>
           <TabsTrigger value="loyalty" data-testid="tab-loyalty">Loyalty</TabsTrigger>
           <TabsTrigger value="settings" data-testid="tab-settings">Settings</TabsTrigger>
+          <TabsTrigger value="maintenance" data-testid="tab-maintenance">Maintenance</TabsTrigger>
           <TabsTrigger value="security" data-testid="tab-security">Keamanan</TabsTrigger>
         </TabsList>
 
@@ -168,6 +170,9 @@ export default function AdminPanel() {
         <TabsContent value="customers" className="mt-6">
           <CustomersTab api={api} password={password} />
         </TabsContent>
+        <TabsContent value="banners" className="mt-6">
+          <BannersTab api={api} />
+        </TabsContent>
         <TabsContent value="affiliates" className="mt-6">
           <AffiliatesTab api={api} password={password} />
         </TabsContent>
@@ -179,6 +184,9 @@ export default function AdminPanel() {
         </TabsContent>
         <TabsContent value="settings" className="mt-6">
           <SettingsTab api={api} />
+        </TabsContent>
+        <TabsContent value="maintenance" className="mt-6">
+          <MaintenanceTab api={api} />
         </TabsContent>
         <TabsContent value="security" className="mt-6">
           <ChangePasswordTab api={api} currentPassword={password} onPasswordChanged={handlePasswordChanged} />
@@ -1049,6 +1057,7 @@ function PhotoPicker({ value, onChange, api }) {
   const [mode, setMode] = useState(initialMode);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
+  const [previewError, setPreviewError] = useState(false);
   const inputRef = useRef(null);
 
   const handleFile = async (file) => {
@@ -1112,13 +1121,19 @@ function PhotoPicker({ value, onChange, api }) {
       </div>
 
       {mode === "url" ? (
-        <Input
-          data-testid="pf-photo"
-          value={value || ""}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder="https://…"
-          className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
-        />
+        <>
+          <Input
+            data-testid="pf-photo"
+            value={value || ""}
+            onChange={(e) => { setPreviewError(false); onChange(e.target.value); }}
+            placeholder="https://…"
+            className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
+          />
+          <p className="text-[10px] text-white/45 leading-relaxed">
+            💡 Tip: pakai link <b>direct image</b> (URL berakhiran <code>.jpg</code>/<code>.png</code>/<code>.webp</code>).
+            Google Drive share-link akan otomatis dinormalisasi. Untuk imgbb, pilih menu <b>"Direct link"</b>.
+          </p>
+        </>
       ) : (
         <div>
           <input
@@ -1158,26 +1173,38 @@ function PhotoPicker({ value, onChange, api }) {
       {preview && (
         <div
           data-testid="pf-photo-preview"
-          className="flex items-center gap-3 p-2 rounded-md bg-[#0f1117] border border-white/10"
+          className={`flex items-center gap-3 p-2 rounded-md bg-[#0f1117] border ${previewError ? "border-red-500/40" : "border-white/10"}`}
         >
-          <img
-            src={preview}
-            alt="Preview"
-            className="w-16 h-16 rounded-md object-cover border border-white/10"
-            onError={(e) => {
-              e.currentTarget.style.display = "none";
-            }}
-          />
+          {previewError ? (
+            <div className="w-16 h-16 rounded-md border border-red-500/40 bg-red-500/5 flex items-center justify-center text-red-400">
+              <X size={20} />
+            </div>
+          ) : (
+            <img
+              src={preview}
+              alt="Preview"
+              className="w-16 h-16 rounded-md object-cover border border-white/10"
+              onError={() => setPreviewError(true)}
+              onLoad={() => setPreviewError(false)}
+            />
+          )}
           <div className="min-w-0 flex-1">
-            <p className="text-[11px] uppercase tracking-widest text-white/40 mb-0.5">Preview</p>
-            <p className="text-xs text-white/70 truncate font-mono" title={value}>
+            <p className="text-[11px] uppercase tracking-widest text-white/40 mb-0.5">
+              {previewError ? "❌ Gagal Memuat" : "✓ Preview"}
+            </p>
+            <p className={`text-xs truncate font-mono ${previewError ? "text-red-300" : "text-white/70"}`} title={value}>
               {value.startsWith("/api/uploads/") ? "📦 Tersimpan di server" : value}
             </p>
+            {previewError && (
+              <p className="text-[10px] text-red-300/80 mt-0.5 leading-tight">
+                URL tidak bisa dimuat sebagai gambar. Pastikan link direct image (bukan halaman).
+              </p>
+            )}
           </div>
           <button
             type="button"
             data-testid="pf-photo-clear"
-            onClick={() => onChange("")}
+            onClick={() => { onChange(""); setPreviewError(false); }}
             className="p-1 rounded hover:bg-white/5 text-white/50 hover:text-white"
             title="Hapus"
           >
@@ -1937,6 +1964,9 @@ function DashboardTab({ api, password }) {
       {/* 7-day trend chart */}
       <TrendChart data={data.trend_7d || []} />
 
+      {/* Visitor Statistics */}
+      <VisitorStatsPanel api={api} />
+
       {/* Top products */}
       <div className="rounded-xl border border-white/10 bg-[#1a1d27] p-5">
         <h3 className="text-sm font-semibold text-white/90 mb-3">
@@ -2087,6 +2117,93 @@ function TrendChart({ data }) {
     </div>
   );
 }
+
+// ---------- Visitor Stats (Dashboard section) ----------
+function VisitorStatsPanel({ api }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    api.get("/admin/visitor-stats").then((r) => setData(r.data)).finally(() => setLoading(false));
+  }, [api]);
+
+  if (loading) return null;
+  if (!data) return null;
+
+  const maxCount = Math.max(1, ...data.chart_7d.map((r) => r.count));
+
+  return (
+    <div className="space-y-4" data-testid="visitor-stats-panel">
+      <div>
+        <h3 className="text-sm font-semibold text-white/90">📊 Statistik Pengunjung</h3>
+        <p className="text-xs text-white/50">Tracking internal (bot difilter). GA4/Pixel tetap jalan untuk data eksternal.</p>
+      </div>
+      <div className="grid grid-cols-3 gap-3">
+        <div className="rounded-xl bg-[#1a1d27] border border-white/10 p-4">
+          <p className="text-[10px] uppercase tracking-wider text-white/50">Hari Ini</p>
+          <p className="text-2xl font-display gold-text mt-1" data-testid="visitor-today">{data.today.toLocaleString("id-ID")}</p>
+        </div>
+        <div className="rounded-xl bg-[#1a1d27] border border-white/10 p-4">
+          <p className="text-[10px] uppercase tracking-wider text-white/50">7 Hari</p>
+          <p className="text-2xl font-display text-white mt-1" data-testid="visitor-week">{data.week.toLocaleString("id-ID")}</p>
+        </div>
+        <div className="rounded-xl bg-[#1a1d27] border border-white/10 p-4">
+          <p className="text-[10px] uppercase tracking-wider text-white/50">30 Hari</p>
+          <p className="text-2xl font-display text-white mt-1" data-testid="visitor-month">{data.month.toLocaleString("id-ID")}</p>
+        </div>
+      </div>
+
+      <div className="rounded-xl bg-[#1a1d27] border border-white/10 p-4">
+        <p className="text-[10px] uppercase tracking-wider text-white/50 mb-3">Grafik 7 Hari Terakhir</p>
+        <div className="flex items-end gap-2 h-32" data-testid="visitor-chart-7d">
+          {data.chart_7d.map((row) => {
+            const h = (row.count / maxCount) * 100;
+            return (
+              <div key={row.date} className="flex-1 flex flex-col items-center gap-1">
+                <div className="w-full flex items-end justify-center h-full">
+                  <div
+                    className="w-full rounded-t bg-gradient-to-t from-[#F5A623]/60 to-[#F5A623] transition-all duration-500"
+                    style={{ height: `${Math.max(h, 4)}%` }}
+                    title={`${row.count} view`}
+                  />
+                </div>
+                <div className="text-[9px] text-white/50 font-mono">{row.date.slice(5)}</div>
+                <div className="text-[10px] text-white/80 font-semibold">{row.count}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="rounded-xl bg-[#1a1d27] border border-white/10 p-4">
+          <p className="text-[10px] uppercase tracking-wider text-white/50 mb-2">Halaman Paling Banyak Dikunjungi</p>
+          <ul className="space-y-1" data-testid="top-pages-list">
+            {data.top_pages.slice(0, 5).map((p, i) => (
+              <li key={i} className="flex items-center justify-between text-xs">
+                <span className="text-white/80 font-mono truncate max-w-[70%]">{p.path}</span>
+                <span className="gold-text font-semibold">{p.count}</span>
+              </li>
+            ))}
+            {data.top_pages.length === 0 && <li className="text-white/40 text-xs">Belum ada data</li>}
+          </ul>
+        </div>
+        <div className="rounded-xl bg-[#1a1d27] border border-white/10 p-4">
+          <p className="text-[10px] uppercase tracking-wider text-white/50 mb-2">Produk Paling Banyak Dilihat</p>
+          <ul className="space-y-1" data-testid="top-products-list">
+            {data.top_products.slice(0, 5).map((p, i) => (
+              <li key={i} className="flex items-center justify-between text-xs">
+                <span className="text-white/80 truncate max-w-[70%]">{p.name}</span>
+                <span className="gold-text font-semibold">{p.views}</span>
+              </li>
+            ))}
+            {data.top_products.length === 0 && <li className="text-white/40 text-xs">Belum ada data</li>}
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
 
 // ---------- Export Report Panel (Dashboard) ----------
@@ -2244,7 +2361,10 @@ function CustomersTab({ api, password }) {
   return (
     <div className="glass rounded-2xl p-6">
       <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
-        <h3 className="font-display text-lg">Database Pelanggan ({filtered.length})</h3>
+        <div>
+          <h3 className="font-display text-lg">History Pembeli ({filtered.length})</h3>
+          <p className="text-xs text-white/50 mt-0.5">Riwayat lengkap tiap pembeli, klik baris untuk detail timeline order.</p>
+        </div>
         <div className="flex items-center gap-2">
           <Select value={exportFmt} onValueChange={setExportFmt}>
             <SelectTrigger data-testid="customers-export-format" className="bg-[#0f1117] border-white/15 text-white w-28 h-9">
@@ -2261,7 +2381,7 @@ function CustomersTab({ api, password }) {
             className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold"
             size="sm"
           >
-            <Download size={14} className="mr-2" /> Export
+            <Download size={14} className="mr-2" /> Export Semua
           </Button>
         </div>
       </div>
@@ -2272,25 +2392,29 @@ function CustomersTab({ api, password }) {
           data-testid="customers-search"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Cari nama atau nomor WA…"
+          placeholder="Cari nama atau nomor WA/Telegram…"
           className="pl-9 bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
         />
       </div>
 
+      <div className="overflow-x-auto">
       <Table>
         <TableHeader>
           <TableRow className="border-white/10 hover:bg-transparent">
             <TableHead className="text-white/60">Nama</TableHead>
-            <TableHead className="text-white/60">Nomor WA</TableHead>
-            <TableHead className="text-white/60">Total Order</TableHead>
+            <TableHead className="text-white/60">WA / TG</TableHead>
+            <TableHead className="text-white/60">Status</TableHead>
+            <TableHead className="text-white/60"># Order</TableHead>
             <TableHead className="text-white/60">Total Belanja</TableHead>
-            <TableHead className="text-white/60">Order Terakhir</TableHead>
+            <TableHead className="text-white/60">Produk Favorit</TableHead>
+            <TableHead className="text-white/60">Sejak</TableHead>
+            <TableHead className="text-white/60">Terakhir</TableHead>
             <TableHead className="text-white/60 text-right">Aksi</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {loading && (
-            <TableRow><TableCell colSpan={6} className="text-center text-white/40 py-6">Memuat…</TableCell></TableRow>
+            <TableRow><TableCell colSpan={9} className="text-center text-white/40 py-6">Memuat…</TableCell></TableRow>
           )}
           {!loading && filtered.map((c) => (
             <TableRow
@@ -2301,85 +2425,173 @@ function CustomersTab({ api, password }) {
             >
               <TableCell className="text-sm">{c.name}</TableCell>
               <TableCell className="font-mono text-xs">{c.whatsapp}</TableCell>
+              <TableCell><TierBadge tier={c.tier} /></TableCell>
               <TableCell className="text-sm">{c.total_orders}</TableCell>
               <TableCell className="gold-text font-semibold">{formatIDR(c.total_spent)}</TableCell>
+              <TableCell className="text-xs text-white/70 max-w-[180px] truncate" title={c.favorite_product}>{c.favorite_product}</TableCell>
+              <TableCell className="text-xs text-white/50">
+                {c.first_order_at ? new Date(c.first_order_at).toLocaleDateString("id-ID") : "-"}
+              </TableCell>
               <TableCell className="text-xs text-white/60">
                 {c.last_order_at ? new Date(c.last_order_at).toLocaleDateString("id-ID") : "-"}
               </TableCell>
               <TableCell className="text-right">
                 <button className="text-xs text-[#F5A623] hover:underline" data-testid={`view-customer-${c.whatsapp}`}>
-                  Lihat Detail
+                  Timeline →
                 </button>
               </TableCell>
             </TableRow>
           ))}
           {!loading && filtered.length === 0 && (
-            <TableRow><TableCell colSpan={6} className="text-center text-white/40 py-6">Belum ada pelanggan</TableCell></TableRow>
+            <TableRow><TableCell colSpan={9} className="text-center text-white/40 py-6">Belum ada pelanggan</TableCell></TableRow>
           )}
         </TableBody>
       </Table>
+      </div>
 
       {detail && (
         <CustomerDetailDialog
           open={!!detail}
           onOpenChange={(v) => !v && setDetail(null)}
           data={detail}
+          password={password}
         />
       )}
     </div>
   );
 }
 
-function CustomerDetailDialog({ open, onOpenChange, data }) {
+function TierBadge({ tier }) {
+  const map = {
+    baru: { label: "Baru", cls: "bg-white/10 text-white/70 border-white/20" },
+    reguler: { label: "Reguler", cls: "bg-[#0088cc]/15 text-[#3aa3ff] border-[#0088cc]/40" },
+    setia: { label: "Setia 💛", cls: "bg-[#F5A623]/15 text-[#F5A623] border-[#F5A623]/40" },
+  };
+  const t = map[tier] || map.baru;
+  return (
+    <span
+      data-testid={`tier-badge-${tier}`}
+      className={`inline-block px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider border ${t.cls}`}
+    >
+      {t.label}
+    </span>
+  );
+}
+
+function CustomerDetailDialog({ open, onOpenChange, data, password }) {
   const { customer, orders } = data;
+  const exportCustomer = async () => {
+    try {
+      // Reuse the orders export with WA filter via clientside for now
+      const blob = new Blob(
+        [
+          "order_code,product_name,price,status,payment_method,created_at\n" +
+            orders
+              .map(
+                (o) =>
+                  `${o.order_code},"${(o.product_name || "").replace(/"/g, '""')}",${o.product_price || 0},${o.status},${o.payment_method || ""},${o.created_at || ""}`
+              )
+              .join("\n"),
+        ],
+        { type: "text/csv" }
+      );
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `history-${customer.whatsapp}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast.success("History pembeli diunduh");
+    } catch {
+      toast.error("Gagal mengunduh");
+    }
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-[#1a1d27] border-white/10 text-white max-w-3xl" data-testid="customer-detail-dialog">
+      <DialogContent className="bg-[#1a1d27] border-white/10 text-white max-w-3xl max-h-[85vh] overflow-y-auto" data-testid="customer-detail-dialog">
         <DialogHeader>
-          <DialogTitle className="font-display text-xl">{customer.name}</DialogTitle>
-          <p className="text-xs font-mono text-[#F5A623]">+{customer.whatsapp}</p>
+          <div className="flex items-center gap-3">
+            <div>
+              <DialogTitle className="font-display text-xl">{customer.name}</DialogTitle>
+              <p className="text-xs font-mono text-[#F5A623]">{customer.whatsapp}</p>
+            </div>
+            <TierBadge tier={customer.tier} />
+          </div>
         </DialogHeader>
-        <div className="grid grid-cols-3 gap-3 my-3">
-          <div className="rounded-lg bg-[#0f1117] p-3 border border-white/5">
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 my-3">
+          <div className="rounded-lg bg-[#0f1117] p-2.5 border border-white/5">
             <p className="text-[10px] uppercase tracking-wide text-white/50">Total Order</p>
-            <p className="text-lg font-semibold">{customer.total_orders}</p>
+            <p className="text-lg font-semibold" data-testid="cd-total-orders">{customer.total_orders}</p>
           </div>
-          <div className="rounded-lg bg-[#0f1117] p-3 border border-white/5">
+          <div className="rounded-lg bg-[#0f1117] p-2.5 border border-white/5">
             <p className="text-[10px] uppercase tracking-wide text-white/50">Total Belanja</p>
-            <p className="text-base font-semibold gold-text">{formatIDR(customer.total_spent)}</p>
+            <p className="text-base font-semibold gold-text" data-testid="cd-total-spent">{formatIDR(customer.total_spent)}</p>
           </div>
-          <div className="rounded-lg bg-[#0f1117] p-3 border border-white/5">
+          <div className="rounded-lg bg-[#0f1117] p-2.5 border border-white/5">
+            <p className="text-[10px] uppercase tracking-wide text-white/50">Pelanggan Sejak</p>
+            <p className="text-xs mt-1" data-testid="cd-first-order">
+              {customer.first_order_at ? new Date(customer.first_order_at).toLocaleDateString("id-ID") : "-"}
+            </p>
+          </div>
+          <div className="rounded-lg bg-[#0f1117] p-2.5 border border-white/5">
             <p className="text-[10px] uppercase tracking-wide text-white/50">Order Terakhir</p>
             <p className="text-xs mt-1">
               {customer.last_order_at ? new Date(customer.last_order_at).toLocaleDateString("id-ID") : "-"}
             </p>
           </div>
         </div>
-        <div className="max-h-72 overflow-y-auto">
-          <Table>
-            <TableHeader>
-              <TableRow className="border-white/10 hover:bg-transparent">
-                <TableHead className="text-white/60">Order</TableHead>
-                <TableHead className="text-white/60">Produk</TableHead>
-                <TableHead className="text-white/60">Harga</TableHead>
-                <TableHead className="text-white/60">Status</TableHead>
-                <TableHead className="text-white/60">Tanggal</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {orders.map((o) => (
-                <TableRow key={o.id} className="border-white/5">
-                  <TableCell className="font-mono text-xs">{o.order_code}</TableCell>
-                  <TableCell className="text-sm">{o.product_name}</TableCell>
-                  <TableCell className="text-sm gold-text">{formatIDR(o.product_price)}</TableCell>
-                  <TableCell><Badge status={o.status} /></TableCell>
-                  <TableCell className="text-xs text-white/60">
-                    {o.created_at ? new Date(o.created_at).toLocaleDateString("id-ID") : "-"}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-xs uppercase tracking-widest text-white/50">Timeline Order</p>
+          <button
+            onClick={exportCustomer}
+            data-testid="export-single-customer-btn"
+            className="text-xs text-[#F5A623] hover:underline inline-flex items-center gap-1"
+          >
+            <Download size={11} /> Export CSV
+          </button>
+        </div>
+
+        {/* Timeline */}
+        <div className="space-y-2 relative pl-4 border-l border-white/10">
+          {orders.map((o) => (
+            <div key={o.id} data-testid={`timeline-order-${o.order_code}`} className="relative">
+              <span
+                className={`absolute -left-[21px] top-1.5 w-3 h-3 rounded-full border-2 border-[#1a1d27] ${
+                  o.status === "confirmed"
+                    ? "bg-green-500"
+                    : o.status === "cancelled" || o.status === "expired"
+                    ? "bg-red-500"
+                    : "bg-[#F5A623]"
+                }`}
+              />
+              <div className="rounded-lg bg-[#0f1117] border border-white/5 p-3">
+                <div className="flex items-start justify-between gap-2 flex-wrap">
+                  <div className="min-w-0">
+                    <p className="text-sm text-white truncate">{o.product_name}</p>
+                    <p className="text-[10px] font-mono text-white/40 mt-0.5">{o.order_code}</p>
+                  </div>
+                  <Badge status={o.status} />
+                </div>
+                <div className="flex items-center justify-between mt-2 text-xs">
+                  <span className="gold-text font-semibold">{formatIDR(o.product_price)}</span>
+                  <span className="text-white/45 uppercase text-[10px]">{o.payment_method}</span>
+                  <span className="text-white/55">
+                    {o.created_at
+                      ? new Date(o.created_at).toLocaleString("id-ID", { dateStyle: "medium", timeStyle: "short" })
+                      : "-"}
+                  </span>
+                </div>
+              </div>
+            </div>
+          ))}
+          {orders.length === 0 && (
+            <p className="text-center text-white/40 text-sm py-4">Belum ada order</p>
+          )}
         </div>
       </DialogContent>
     </Dialog>
@@ -3510,3 +3722,321 @@ function CouponFormDialog({ open, onOpenChange, editing, api, onSaved }) {
   );
 }
 
+
+
+// ---------- Banners (Promo Slider) ----------
+function BannersTab({ api }) {
+  const [items, setItems] = useState([]);
+  const [editing, setEditing] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const r = await api.get("/admin/banners");
+      setItems(r.data);
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+
+  const toggleActive = async (b) => {
+    try {
+      await api.put(`/admin/banners/${b.id}`, { ...b, active: !b.active });
+      toast.success(!b.active ? "Banner diaktifkan" : "Banner dinonaktifkan");
+      load();
+    } catch { toast.error("Gagal update"); }
+  };
+  const remove = async (b) => {
+    if (!window.confirm(`Hapus banner "${b.title || "(tanpa judul)"}"?`)) return;
+    try { await api.delete(`/admin/banners/${b.id}`); load(); toast.success("Banner dihapus"); }
+    catch { toast.error("Gagal hapus"); }
+  };
+
+  return (
+    <div className="glass rounded-2xl p-6">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <div>
+          <h3 className="font-display text-lg">Banner Promo ({items.length})</h3>
+          <p className="text-xs text-white/50 mt-0.5">Kelola slider hero di storefront. Urutan berdasarkan Display Order (kecil → tampil dulu).</p>
+        </div>
+        <Button
+          data-testid="banner-add-btn"
+          onClick={() => { setEditing(null); setOpen(true); }}
+          className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold"
+          size="sm"
+        >
+          + Tambah Banner
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {loading && <p className="text-white/40 text-sm">Memuat…</p>}
+        {!loading && items.length === 0 && (
+          <p className="text-white/40 text-sm col-span-2">Belum ada banner. Klik &quot;Tambah Banner&quot; untuk mulai.</p>
+        )}
+        {items.map((b) => (
+          <div
+            key={b.id}
+            data-testid={`banner-item-${b.id}`}
+            className={`rounded-xl overflow-hidden border ${b.active ? "border-[#F5A623]/30" : "border-white/10 opacity-60"} bg-[#0f1117]`}
+          >
+            <div className="aspect-[2/1] relative bg-black">
+              {b.image_url ? (
+                <img
+                  src={resolveImageUrl(b.image_url)}
+                  alt={b.title || "Banner"}
+                  className="w-full h-full object-cover"
+                  onError={(e) => { e.currentTarget.style.display = "none"; }}
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-white/30 text-xs">No image</div>
+              )}
+              <div className="absolute top-2 right-2 px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider bg-black/50 text-white/80">
+                Urutan #{b.display_order}
+              </div>
+            </div>
+            <div className="p-3">
+              <div className="font-display text-sm text-white truncate">{b.title || "(tanpa judul)"}</div>
+              <p className="text-xs text-white/60 truncate mt-0.5">{b.subtitle || "-"}</p>
+              {b.cta_text && (
+                <p className="text-[10px] text-[#F5A623] mt-1">CTA: {b.cta_text} → {b.cta_link}</p>
+              )}
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  data-testid={`banner-toggle-${b.id}`}
+                  onClick={() => toggleActive(b)}
+                  className={`text-[11px] px-2 py-1 rounded-md border ${b.active ? "bg-green-500/15 border-green-500/30 text-green-300" : "bg-white/5 border-white/15 text-white/60"}`}
+                >
+                  {b.active ? "● Aktif" : "○ Nonaktif"}
+                </button>
+                <button
+                  data-testid={`banner-edit-${b.id}`}
+                  onClick={() => { setEditing(b); setOpen(true); }}
+                  className="text-[11px] px-2 py-1 rounded-md bg-white/5 border border-white/15 hover:bg-white/10"
+                >
+                  Edit
+                </button>
+                <button
+                  data-testid={`banner-delete-${b.id}`}
+                  onClick={() => remove(b)}
+                  className="text-[11px] px-2 py-1 rounded-md bg-red-500/10 border border-red-500/30 text-red-300 hover:bg-red-500/20"
+                >
+                  Hapus
+                </button>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {open && (
+        <BannerFormDialog
+          open={open}
+          onOpenChange={setOpen}
+          editing={editing}
+          api={api}
+          onSaved={() => { setOpen(false); setEditing(null); load(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+function BannerFormDialog({ open, onOpenChange, editing, api, onSaved }) {
+  const [form, setForm] = useState(() => editing || {
+    image_url: "",
+    title: "",
+    subtitle: "",
+    cta_text: "",
+    cta_link: "",
+    active: true,
+    display_order: 100,
+  });
+  const [saving, setSaving] = useState(false);
+
+  const save = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const payload = {
+        image_url: form.image_url,
+        title: form.title,
+        subtitle: form.subtitle,
+        cta_text: form.cta_text,
+        cta_link: form.cta_link,
+        active: !!form.active,
+        display_order: parseInt(form.display_order || 100, 10),
+      };
+      if (editing) await api.put(`/admin/banners/${editing.id}`, payload);
+      else await api.post("/admin/banners", payload);
+      toast.success(editing ? "Banner diupdate" : "Banner ditambahkan");
+      onSaved();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Gagal simpan");
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent data-testid="banner-form-dialog" className="bg-[#1a1d27] border-white/10 text-white sm:max-w-[520px] max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="font-display">{editing ? "Edit Banner" : "Tambah Banner"}</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={save} className="space-y-3">
+          <Field label="URL Gambar Banner">
+            <Input data-testid="bf-image" value={form.image_url} onChange={(e) => setForm({ ...form, image_url: e.target.value })}
+              placeholder="https://…" className="bg-[#0f1117] border-white/15" />
+          </Field>
+          <Field label="Judul Banner">
+            <Input data-testid="bf-title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })}
+              className="bg-[#0f1117] border-white/15" />
+          </Field>
+          <Field label="Subjudul / Deskripsi (opsional)">
+            <Input data-testid="bf-subtitle" value={form.subtitle} onChange={(e) => setForm({ ...form, subtitle: e.target.value })}
+              className="bg-[#0f1117] border-white/15" />
+          </Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Teks CTA (opsional)">
+              <Input data-testid="bf-cta-text" value={form.cta_text} onChange={(e) => setForm({ ...form, cta_text: e.target.value })}
+                className="bg-[#0f1117] border-white/15" />
+            </Field>
+            <Field label="Link CTA (opsional)">
+              <Input data-testid="bf-cta-link" value={form.cta_link} onChange={(e) => setForm({ ...form, cta_link: e.target.value })}
+                placeholder="/partnership atau https://…" className="bg-[#0f1117] border-white/15" />
+            </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-3 items-end">
+            <Field label="Urutan Tampil">
+              <Input type="number" data-testid="bf-order" value={form.display_order} onChange={(e) => setForm({ ...form, display_order: e.target.value })}
+                className="bg-[#0f1117] border-white/15" />
+            </Field>
+            <div className="flex items-center justify-between px-3 py-2 rounded-md bg-[#0f1117] border border-white/10">
+              <Label className="text-sm">Aktif</Label>
+              <Switch data-testid="bf-active" checked={!!form.active} onCheckedChange={(v) => setForm({ ...form, active: v })}
+                className="data-[state=checked]:bg-[#F5A623]" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="submit" disabled={saving} data-testid="bf-save-btn" className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold">
+              {saving ? <Loader2 className="animate-spin" size={15} /> : "Simpan"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------- Maintenance Mode ----------
+function MaintenanceTab({ api }) {
+  const [form, setForm] = useState({
+    enabled: false,
+    message: "",
+    estimated_finish: "",
+    contact_wa: "",
+    contact_telegram: "",
+  });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api.get("/maintenance").then((r) => {
+      setForm({
+        enabled: !!r.data.enabled,
+        message: r.data.message || "",
+        estimated_finish: r.data.estimated_finish || "",
+        contact_wa: r.data.contact_wa || "",
+        contact_telegram: r.data.contact_telegram || "",
+      });
+    }).finally(() => setLoading(false));
+  }, [api]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.put("/admin/maintenance", form);
+      toast.success(form.enabled ? "Mode maintenance AKTIF 🚧" : "Mode maintenance NONAKTIF ✅");
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Gagal simpan");
+    } finally { setSaving(false); }
+  };
+
+  if (loading) return <div className="glass rounded-2xl p-6 text-white/50 text-sm">Memuat…</div>;
+
+  return (
+    <div className="glass rounded-2xl p-6 space-y-4 max-w-2xl" data-testid="maintenance-tab">
+      <div>
+        <h3 className="font-display text-lg">Mode Maintenance</h3>
+        <p className="text-xs text-white/50 mt-0.5">Saat aktif, storefront tampilkan halaman pemeliharaan. /admin tetap bisa diakses.</p>
+      </div>
+
+      <div className={`flex items-center justify-between px-4 py-3 rounded-lg border ${form.enabled ? "bg-red-500/10 border-red-500/30" : "bg-green-500/5 border-green-500/20"}`}>
+        <div>
+          <div className="font-display text-sm">Status</div>
+          <div className={`text-xs mt-0.5 ${form.enabled ? "text-red-300" : "text-green-300"}`}>
+            {form.enabled ? "🚧 AKTIF — storefront ditutup" : "✅ NONAKTIF — storefront normal"}
+          </div>
+        </div>
+        <Switch
+          data-testid="maintenance-toggle"
+          checked={form.enabled}
+          onCheckedChange={(v) => setForm({ ...form, enabled: v })}
+          className="data-[state=checked]:bg-red-500"
+        />
+      </div>
+
+      <Field label="Pesan Maintenance (untuk pengunjung)">
+        <textarea
+          data-testid="maintenance-message"
+          value={form.message}
+          onChange={(e) => setForm({ ...form, message: e.target.value })}
+          rows={3}
+          className="w-full bg-[#0f1117] border border-white/15 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-[#F5A623]/40"
+        />
+      </Field>
+
+      <Field label="Estimasi Selesai (opsional)">
+        <Input
+          data-testid="maintenance-eta-input"
+          value={form.estimated_finish}
+          onChange={(e) => setForm({ ...form, estimated_finish: e.target.value })}
+          placeholder="Contoh: Hari ini pukul 18.00 WIB"
+          className="bg-[#0f1117] border-white/15"
+        />
+      </Field>
+
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Kontak WhatsApp (opsional)">
+          <Input
+            data-testid="maintenance-wa"
+            value={form.contact_wa}
+            onChange={(e) => setForm({ ...form, contact_wa: e.target.value })}
+            placeholder="628xxxx"
+            className="bg-[#0f1117] border-white/15"
+          />
+        </Field>
+        <Field label="Kontak Telegram (opsional)">
+          <Input
+            data-testid="maintenance-tg"
+            value={form.contact_telegram}
+            onChange={(e) => setForm({ ...form, contact_telegram: e.target.value })}
+            placeholder="@username"
+            className="bg-[#0f1117] border-white/15"
+          />
+        </Field>
+      </div>
+
+      <Button
+        onClick={save}
+        disabled={saving}
+        data-testid="maintenance-save-btn"
+        className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold"
+      >
+        {saving ? <Loader2 className="animate-spin" size={15} /> : "Simpan Perubahan"}
+      </Button>
+    </div>
+  );
+}

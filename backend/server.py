@@ -5,6 +5,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 import random
+import re
 import string
 import httpx
 import bcrypt
@@ -499,6 +500,127 @@ async def admin_update_stats(payload: StatsUpdate, x_admin_password: Optional[st
     return {k: data[k] for k in DEFAULT_STATS.keys()}
 
 
+# ---------- Maintenance mode ----------
+DEFAULT_MAINTENANCE = {
+    "enabled": False,
+    "message": "Kami sedang melakukan peningkatan layanan untuk Sobat Creative. Mohon tunggu sebentar ya! 🙏",
+    "estimated_finish": "",
+    "contact_wa": "",
+    "contact_telegram": "",
+}
+
+
+class MaintenanceUpdate(BaseModel):
+    enabled: bool = False
+    message: str = DEFAULT_MAINTENANCE["message"]
+    estimated_finish: str = ""
+    contact_wa: str = ""
+    contact_telegram: str = ""
+
+
+@api_router.get("/maintenance")
+async def get_maintenance():
+    doc = await db.settings.find_one({"id": "maintenance"}, {"_id": 0}) or {}
+    return {k: doc.get(k, v) for k, v in DEFAULT_MAINTENANCE.items()}
+
+
+@api_router.put("/admin/maintenance")
+async def admin_update_maintenance(payload: MaintenanceUpdate, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    data = {"id": "maintenance", **payload.model_dump()}
+    await db.settings.update_one({"id": "maintenance"}, {"$set": data}, upsert=True)
+    return {k: data[k] for k in DEFAULT_MAINTENANCE.keys()}
+
+
+# ---------- Page Views (visitor tracking) ----------
+_BOT_UA_PATTERN = re.compile(
+    r"bot|crawl|spider|slurp|bingpreview|preview|facebookexternalhit|whatsapp|telegrambot|discordbot|linkedinbot|twitterbot|semrushbot|ahrefsbot|mj12bot|petalbot|yandex|baiduspider|duckduckbot|applebot|pingdom|uptimerobot",
+    re.IGNORECASE,
+)
+
+
+class PageViewPayload(BaseModel):
+    path: str
+    product_slug: Optional[str] = None
+
+
+@api_router.post("/track/page-view")
+async def track_page_view(payload: PageViewPayload, request: Request):
+    """Lightweight visitor tracking. Skips bots via user-agent heuristic."""
+    ua = request.headers.get("user-agent", "")
+    if _BOT_UA_PATTERN.search(ua or ""):
+        return {"tracked": False, "reason": "bot"}
+    doc = {
+        "id": str(uuid.uuid4()),
+        "path": (payload.path or "/")[:200],
+        "product_slug": payload.product_slug,
+        "user_agent": ua[:200],
+        "created_at": now_iso(),
+        "date": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+    }
+    await db.page_views.insert_one(doc)
+    return {"tracked": True}
+
+
+@api_router.get("/admin/visitor-stats")
+async def admin_visitor_stats(x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    now = datetime.now(timezone.utc)
+    today_str = now.strftime("%Y-%m-%d")
+    week_ago = (now - timedelta(days=6)).strftime("%Y-%m-%d")
+    month_ago = (now - timedelta(days=29)).strftime("%Y-%m-%d")
+
+    total_today = await db.page_views.count_documents({"date": today_str})
+    total_week = await db.page_views.count_documents({"date": {"$gte": week_ago}})
+    total_month = await db.page_views.count_documents({"date": {"$gte": month_ago}})
+
+    # Grafik 7 hari
+    daily = await db.page_views.aggregate([
+        {"$match": {"date": {"$gte": week_ago}}},
+        {"$group": {"_id": "$date", "count": {"$sum": 1}}},
+        {"$sort": {"_id": 1}},
+    ]).to_list(30)
+    daily_map = {r["_id"]: r["count"] for r in daily}
+    chart = []
+    for i in range(7):
+        d = (now - timedelta(days=6 - i)).strftime("%Y-%m-%d")
+        chart.append({"date": d, "count": daily_map.get(d, 0)})
+
+    # Halaman paling banyak dikunjungi
+    top_pages = await db.page_views.aggregate([
+        {"$match": {"date": {"$gte": month_ago}}},
+        {"$group": {"_id": "$path", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 10},
+    ]).to_list(10)
+
+    # Produk paling banyak dilihat (via product_slug)
+    top_products_raw = await db.page_views.aggregate([
+        {"$match": {"date": {"$gte": month_ago}, "product_slug": {"$ne": None}}},
+        {"$group": {"_id": "$product_slug", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 10},
+    ]).to_list(10)
+    slugs = [r["_id"] for r in top_products_raw if r.get("_id")]
+    prod_docs = await db.products.find({"slug": {"$in": slugs}}, {"_id": 0, "slug": 1, "name": 1}).to_list(50)
+    name_map = {p["slug"]: p["name"] for p in prod_docs}
+    top_products = [
+        {"slug": r["_id"], "name": name_map.get(r["_id"], r["_id"]), "views": r["count"]}
+        for r in top_products_raw
+    ]
+
+    return {
+        "today": total_today,
+        "week": total_week,
+        "month": total_month,
+        "chart_7d": chart,
+        "top_pages": [{"path": r["_id"], "count": r["count"]} for r in top_pages],
+        "top_products": top_products,
+    }
+
+
+
+
 # ---------- Public: Orders ----------
 @api_router.post("/orders")
 async def create_order(payload: OrderCreate):
@@ -629,6 +751,19 @@ async def _settle_paid_order(order_code: str) -> bool:
     if res.modified_count != 1:
         return False  # already settled or not found
     order = await db.orders.find_one({"order_code": order_code}, {"_id": 0})
+    # Decrement stock jika produk pakai stock_limit_enabled + trigger low-stock alert
+    if order:
+        prod = await db.products.find_one({"id": order.get("product_id")}, {"_id": 0})
+        if prod and prod.get("stock_limit_enabled"):
+            new_qty = max(0, int(prod.get("stock_quantity", 0)) - 1)
+            upd = {"stock_quantity": new_qty}
+            if new_qty <= 0:
+                upd["stock_status"] = "unavailable"
+            await db.products.update_one({"id": prod["id"]}, {"$set": upd})
+            try:
+                await _check_and_notify_low_stock(prod["id"])
+            except Exception as e:
+                logger.error(f"Low stock alert failed: {e}")
     if order and order.get("referral_affiliate_code") and order.get("commission_amount", 0) > 0:
         await db.affiliates.update_one(
             {"affiliate_code": order["referral_affiliate_code"]},
@@ -803,7 +938,6 @@ async def admin_change_password(payload: ChangePassword, x_admin_password: Optio
     return {"ok": True}
 
 
-import re
 def _slugify(name: str) -> str:
     """Convert product name → URL slug. Handle diacritics minimally."""
     s = (name or "").lower().strip()
@@ -811,6 +945,34 @@ def _slugify(name: str) -> str:
     s = re.sub(r"[\s_-]+", "-", s)
     s = s.strip("-")
     return s or "produk"
+
+
+def _normalize_photo_url(url: Optional[str]) -> str:
+    """Normalisasi URL foto dari beberapa host populer supaya bisa dipakai langsung sebagai <img src>.
+
+    - Google Drive share link (`.../file/d/FILEID/view?...`) → `https://lh3.googleusercontent.com/d/FILEID`
+    - Google Drive `open?id=FILEID` → sama seperti di atas
+    - Dropbox `?dl=0` → `?raw=1`
+    - imgbb page link (`ibb.co/XXX`) → dibiarkan (user disarankan copy "Direct link")
+    Return URL yang sudah dinormalisasi (atau URL asli kalau tidak match).
+    """
+    if not url:
+        return ""
+    u = url.strip()
+    # Google Drive
+    m = re.search(r"drive\.google\.com/(?:file/d/|open\?id=|uc\?(?:.*&)?id=)([\w-]{10,})", u)
+    if m:
+        file_id = m.group(1)
+        return f"https://lh3.googleusercontent.com/d/{file_id}"
+    # Dropbox
+    if "dropbox.com" in u:
+        if "?dl=0" in u:
+            u = u.replace("?dl=0", "?raw=1")
+        elif "?raw=1" not in u and "?dl=1" not in u:
+            sep = "&" if "?" in u else "?"
+            u = f"{u}{sep}raw=1"
+        return u
+    return u
 
 
 async def _generate_unique_slug(name: str, ignore_id: Optional[str] = None) -> str:
@@ -828,10 +990,50 @@ async def _generate_unique_slug(name: str, ignore_id: Optional[str] = None) -> s
         idx += 1
 
 
+async def _check_and_notify_low_stock(product_id: str) -> None:
+    """Kirim notif Telegram ke admin saat stok terbatas mencapai threshold ≤5 atau =0.
+
+    Idempoten: pakai field `low_stock_alerted_at` & `out_of_stock_alerted_at` di dokumen produk
+    sehingga notif tidak berulang selama stok tetap di kondisi tersebut. Reset otomatis saat
+    stok ditambah kembali (lihat admin_update_product / admin_update_stock).
+    """
+    prod = await db.products.find_one({"id": product_id}, {"_id": 0})
+    if not prod or not prod.get("stock_limit_enabled"):
+        return
+    qty = int(prod.get("stock_quantity", 0) or 0)
+    name = prod.get("name", "?")
+    admin_url = f"{PUBLIC_STORE_URL.rstrip('/')}/admin"
+
+    if qty <= 0 and not prod.get("out_of_stock_alerted_at"):
+        await send_telegram(
+            f"<b>🚨 Stok Habis!</b>\n\n"
+            f"Produk: <b>{name}</b> sudah habis dan otomatis tidak bisa dipesan.\n"
+            f"Tambah stok atau nonaktifkan produk.\n\n"
+            f"<a href=\"{admin_url}\">Buka Admin Panel →</a>"
+        )
+        await db.products.update_one(
+            {"id": product_id},
+            {"$set": {"out_of_stock_alerted_at": now_iso(), "low_stock_alerted_at": now_iso()}},
+        )
+    elif 0 < qty <= 5 and not prod.get("low_stock_alerted_at"):
+        await send_telegram(
+            f"<b>⚠️ Stok Menipis!</b>\n\n"
+            f"Produk: <b>{name}</b>\n"
+            f"Sisa stok: <b>{qty} slot</b>\n\n"
+            f"Segera tambah stok di admin panel.\n"
+            f"<a href=\"{admin_url}\">Buka Admin Panel →</a>"
+        )
+        await db.products.update_one(
+            {"id": product_id},
+            {"$set": {"low_stock_alerted_at": now_iso()}},
+        )
+
+
 @api_router.post("/admin/products")
 async def admin_create_product(payload: ProductCreate, x_admin_password: Optional[str] = Header(None)):
     await verify_admin(x_admin_password)
     data = payload.model_dump()
+    data["photo_url"] = _normalize_photo_url(data.get("photo_url"))
     data["slug"] = await _generate_unique_slug(data["name"])
     p = Product(**data)
     await db.products.insert_one(p.model_dump())
@@ -1047,6 +1249,14 @@ async def admin_update_product(product_id: str, payload: ProductCreate, x_admin_
     if not old:
         raise HTTPException(404, "Produk tidak ditemukan")
     data = payload.model_dump()
+    data["photo_url"] = _normalize_photo_url(data.get("photo_url"))
+    # Reset low-stock alert flags kalau stok direfill di atas threshold
+    new_qty = int(data.get("stock_quantity", 0) or 0)
+    if new_qty > 5:
+        data["low_stock_alerted_at"] = None
+        data["out_of_stock_alerted_at"] = None
+    elif new_qty > 0:
+        data["out_of_stock_alerted_at"] = None
     # Regenerate slug jika nama berubah
     if data["name"] != old.get("name") or not old.get("slug"):
         data["slug"] = await _generate_unique_slug(data["name"], ignore_id=product_id)
@@ -1162,6 +1372,10 @@ async def admin_update_order_status(order_id: str, payload: StatusUpdate, x_admi
             if new_qty <= 0:
                 update_data["stock_status"] = "unavailable"
             await db.products.update_one({"id": prod["id"]}, {"$set": update_data})
+            try:
+                await _check_and_notify_low_stock(prod["id"])
+            except Exception as e:
+                logger.error(f"Low stock alert failed: {e}")
 
         # Referral commission
         if order.get("referral_affiliate_code") and order.get("commission_amount", 0) > 0:
@@ -1707,19 +1921,41 @@ async def admin_customers(
                         ]
                     }
                 },
+                "first_order_at": {"$min": "$created_at"},
                 "last_order_at": {"$max": "$created_at"},
+                "product_names": {"$push": "$product_name"},
             }
         },
         {"$sort": {"last_order_at": -1}},
     ]
     rows = await db.orders.aggregate(pipeline).to_list(5000)
+
+    def _tier(count: int) -> str:
+        if count >= 6:
+            return "setia"
+        if count >= 2:
+            return "reguler"
+        return "baru"
+
+    def _favorite(names: List[str]) -> str:
+        from collections import Counter
+        if not names:
+            return "-"
+        counter = Counter([n for n in names if n])
+        if not counter:
+            return "-"
+        return counter.most_common(1)[0][0]
+
     customers = [
         {
             "whatsapp": r["_id"] or "-",
             "name": r.get("name") or "-",
             "total_orders": int(r.get("total_orders") or 0),
             "total_spent": float(r.get("total_spent") or 0),
+            "first_order_at": r.get("first_order_at"),
             "last_order_at": r.get("last_order_at"),
+            "favorite_product": _favorite(r.get("product_names") or []),
+            "tier": _tier(int(r.get("total_orders") or 0)),
         }
         for r in rows
         if r.get("_id")
@@ -2650,6 +2886,73 @@ async def validate_coupon(request: Request):
     }
 
 
+# ---------- Banner Promo (slider hero) ----------
+class Banner(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    image_url: str = ""
+    title: str = ""
+    subtitle: str = ""
+    cta_text: str = ""
+    cta_link: str = ""
+    active: bool = True
+    display_order: int = 100
+    created_at: str = Field(default_factory=now_iso)
+
+
+class BannerCreate(BaseModel):
+    image_url: str = ""
+    title: str = ""
+    subtitle: str = ""
+    cta_text: str = ""
+    cta_link: str = ""
+    active: bool = True
+    display_order: int = 100
+
+
+@api_router.get("/banners")
+async def public_list_banners():
+    """Public: banner aktif untuk storefront slider."""
+    rows = await db.banners.find({"active": True}, {"_id": 0}).sort("display_order", 1).to_list(20)
+    return rows
+
+
+@api_router.get("/admin/banners")
+async def admin_list_banners(x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    return await db.banners.find({}, {"_id": 0}).sort("display_order", 1).to_list(50)
+
+
+@api_router.post("/admin/banners")
+async def admin_create_banner(payload: BannerCreate, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    data = payload.model_dump()
+    data["image_url"] = _normalize_photo_url(data.get("image_url"))
+    b = Banner(**data)
+    await db.banners.insert_one(b.model_dump())
+    return b.model_dump()
+
+
+@api_router.put("/admin/banners/{banner_id}")
+async def admin_update_banner(
+    banner_id: str,
+    payload: BannerCreate,
+    x_admin_password: Optional[str] = Header(None),
+):
+    await verify_admin(x_admin_password)
+    data = payload.model_dump()
+    data["image_url"] = _normalize_photo_url(data.get("image_url"))
+    await db.banners.update_one({"id": banner_id}, {"$set": data})
+    return await db.banners.find_one({"id": banner_id}, {"_id": 0})
+
+
+@api_router.delete("/admin/banners/{banner_id}")
+async def admin_delete_banner(banner_id: str, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    r = await db.banners.delete_one({"id": banner_id})
+    return {"deleted": r.deleted_count}
+
+
 app.include_router(api_router)
 app.add_middleware(
     CORSMiddleware,
@@ -2738,6 +3041,24 @@ async def _start_scheduler():
         )
     except Exception as e:
         logger.error(f"Stock migration error: {e}")
+
+    # Seed banner default kalau kosong
+    try:
+        banner_count = await db.banners.count_documents({})
+        if banner_count == 0:
+            default_banner = Banner(
+                image_url="https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1200",
+                title="Selamat Datang di CreativeStore!",
+                subtitle="Digital goods premium untuk Sobat Creative ✨",
+                cta_text="Lihat Katalog",
+                cta_link="#products",
+                active=True,
+                display_order=1,
+            )
+            await db.banners.insert_one(default_banner.model_dump())
+            logger.info("Seeded default banner")
+    except Exception as e:
+        logger.error(f"Banner seed error: {e}")
 
     try:
         _scheduler = init_scheduler(db, send_telegram)

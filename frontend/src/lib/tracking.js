@@ -101,6 +101,27 @@ export function trackPageView(path) {
       page_title: document.title,
     });
   }
+  // Internal lightweight tracking (dedup per path per session)
+  try {
+    const key = `cs_pv_${pagePath}`;
+    if (!sessionStorage.getItem(key)) {
+      sessionStorage.setItem(key, "1");
+      // Extract product slug from /produk/:slug path
+      let productSlug = null;
+      const m = /^\/produk\/([^/?#]+)/.exec(pagePath);
+      if (m) productSlug = decodeURIComponent(m[1]);
+      const BE = process.env.REACT_APP_BACKEND_URL;
+      if (BE) {
+        fetch(`${BE}/api/track/page-view`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: pagePath, product_slug: productSlug }),
+        }).catch(() => {});
+      }
+    }
+  } catch (_) {
+    /* storage disabled — ignore */
+  }
 }
 
 export function trackViewContent(product) {

@@ -10,6 +10,7 @@ import OnlineCounter from "@/components/OnlineCounter";
 import LiveFeed from "@/components/LiveFeed";
 import SearchBar from "@/components/SearchBar";
 import TrustBadges from "@/components/TrustBadges";
+import BannerSlider from "@/components/BannerSlider";
 import {
   Sparkles, ShieldCheck, Zap, Flame, TrendingUp, Clock, ArrowDown,
   Video, Shield, Play, Mail, Grid, LayoutGrid,
@@ -157,6 +158,11 @@ export default function Storefront() {
             </div>
           </div>
         </div>
+      </section>
+
+      {/* BANNER SLIDER */}
+      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-6">
+        <BannerSlider />
       </section>
 
       {/* TRUST BADGES */}

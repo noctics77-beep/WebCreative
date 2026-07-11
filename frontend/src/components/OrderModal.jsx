@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import confetti from "canvas-confetti";
 import {
   Dialog,
   DialogContent,
@@ -13,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { api, formatIDR, resolveImageUrl } from "@/lib/api";
 import { toast } from "sonner";
-import { CheckCircle2, Copy, Loader2, Clock, ShieldCheck, QrCode } from "lucide-react";
+import { CheckCircle2, Copy, Loader2, Clock, ShieldCheck, QrCode, PackageSearch, Store } from "lucide-react";
 import {
   trackViewContent,
   trackInitiateCheckout,
@@ -62,6 +63,26 @@ export default function OrderModal({ open, onClose, product, referral }) {
       }
     }
   }, [open, product]);
+
+  // Confetti burst on success ✨
+  useEffect(() => {
+    if (step !== "success") return;
+    const fire = (particleRatio, opts) =>
+      confetti({
+        origin: { y: 0.7 },
+        ...opts,
+        particleCount: Math.floor(200 * particleRatio),
+      });
+    try {
+      fire(0.25, { spread: 26, startVelocity: 55, colors: ["#F5A623", "#F8D471", "#10b981"] });
+      fire(0.2, { spread: 60, colors: ["#F5A623", "#ffffff"] });
+      fire(0.35, { spread: 100, decay: 0.91, scalar: 0.8, colors: ["#F5A623", "#10b981", "#F8D471"] });
+      fire(0.1, { spread: 120, startVelocity: 25, decay: 0.92, scalar: 1.2 });
+      fire(0.1, { spread: 120, startVelocity: 45, colors: ["#F5A623", "#10b981"] });
+    } catch (_) {
+      /* confetti optional */
+    }
+  }, [step]);
 
   // Countdown ticker for QRIS Otomatis
   useEffect(() => {
@@ -655,76 +676,116 @@ export default function OrderModal({ open, onClose, product, referral }) {
         )}
 
         {step === "success" && (
-          <div className="text-center py-4" data-testid="order-success">
-            <div
-              className={`mx-auto w-14 h-14 rounded-full flex items-center justify-center mb-3 ${
-                autoPaid ? "bg-[#10b981]/15" : "bg-[#10b981]/15"
-              }`}
-            >
+          <div className="py-2" data-testid="order-success">
+            {/* Big animated checkmark */}
+            <div className="mx-auto w-20 h-20 rounded-full bg-gradient-to-br from-[#10b981]/30 to-[#10b981]/10 border-2 border-[#10b981]/40 flex items-center justify-center mb-4 animate-in zoom-in duration-500">
               {autoPaid ? (
-                <ShieldCheck className="text-[#10b981]" size={28} />
+                <ShieldCheck className="text-[#10b981]" size={42} strokeWidth={2.5} />
               ) : (
-                <CheckCircle2 className="text-[#10b981]" size={28} />
+                <CheckCircle2 className="text-[#10b981]" size={42} strokeWidth={2.5} />
               )}
             </div>
-            <h3 className="font-display text-2xl" data-testid="success-title">
-              {autoPaid ? "Pembayaran Lunas! ✅" : "Pesanan Diterima!"}
+            <h3
+              className="font-display text-2xl sm:text-3xl text-center gold-text font-semibold"
+              data-testid="success-title"
+            >
+              Terima Kasih, Sobat Creative! 🎉
             </h3>
-            <p className="text-white/55 text-sm mt-1">
+            <p className="text-white/70 text-sm text-center mt-1.5">
               {autoPaid
-                ? "Pembayaran terverifikasi otomatis. Pesanan kamu akan segera diproses."
-                : "Order ID kamu — simpan untuk konfirmasi pembayaran."}
+                ? "Pembayaran terverifikasi otomatis. Pesananmu akan segera diproses."
+                : "Pesanan kamu sudah kami terima."}
             </p>
-            <div className="my-5 mx-auto inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#0f1117] border border-[#F5A623]/40">
-              <span className="font-mono text-lg gold-text" data-testid="order-code-display">
-                {orderCode}
-              </span>
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText(orderCode);
-                  toast.success("Order ID disalin");
-                }}
-                className="text-white/60 hover:text-[#F5A623]"
-                data-testid="copy-order-code-btn"
+
+            {/* Order details card */}
+            <div
+              data-testid="order-details-card"
+              className="mt-5 rounded-xl bg-[#0f1117] border border-white/10 divide-y divide-white/5"
+            >
+              <div className="flex items-center justify-between px-4 py-3">
+                <span className="text-xs uppercase tracking-widest text-white/45">Order ID</span>
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-sm gold-text font-semibold" data-testid="order-code-display">
+                    {orderCode}
+                  </span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(orderCode);
+                      toast.success("Order ID disalin ✓");
+                    }}
+                    className="text-white/50 hover:text-[#F5A623] transition-colors"
+                    data-testid="copy-order-code-btn"
+                    title="Salin"
+                  >
+                    <Copy size={14} />
+                  </button>
+                </div>
+              </div>
+              <div className="flex items-center justify-between px-4 py-3">
+                <span className="text-xs uppercase tracking-widest text-white/45">Produk</span>
+                <span className="text-sm text-white/85 text-right max-w-[60%] truncate">{product.name}</span>
+              </div>
+              <div className="flex items-center justify-between px-4 py-3">
+                <span className="text-xs uppercase tracking-widest text-white/45">Total Bayar</span>
+                <span className="text-sm text-white font-semibold">{formatIDR(autoTotal)}</span>
+              </div>
+              <div className="flex items-center justify-between px-4 py-3">
+                <span className="text-xs uppercase tracking-widest text-white/45">Metode</span>
+                <span className="text-sm text-white/85 uppercase">
+                  {form.payment_method === "qris_otomatis" ? "QRIS Otomatis" : form.payment_method}
+                </span>
+              </div>
+            </div>
+
+            {/* Instructions */}
+            <p className="text-xs sm:text-sm text-white/60 text-center mt-4 leading-relaxed px-2">
+              {autoPaid ? (
+                <>Pesananmu akan diproses dalam 1×24 jam hari kerja. Pantau status di halaman <b>Lacak Pesanan</b> ya! 🚀</>
+              ) : (
+                <>Mohon tunggu konfirmasi admin via <b>WhatsApp/Telegram</b>. Pantau status di halaman <b>Lacak Pesanan</b> ya! 🚀</>
+              )}
+            </p>
+
+            {/* Action buttons */}
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              <a
+                href="/lacak-pesanan"
+                data-testid="track-order-btn"
+                className="inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] text-sm font-semibold transition-colors"
               >
-                <Copy size={15} />
+                <PackageSearch size={15} /> Lacak Pesanan
+              </a>
+              <button
+                type="button"
+                onClick={() => handleClose(false)}
+                data-testid="back-to-store-btn"
+                className="inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg bg-white/5 hover:bg-white/10 text-white text-sm font-medium border border-white/10 transition-colors"
+              >
+                <Store size={15} /> Kembali ke Toko
               </button>
             </div>
-            {!autoPaid && (
-              <p className="text-sm text-white/60">
-                Mohon tunggu konfirmasi admin via <b>WhatsApp / Telegram</b>.
-              </p>
-            )}
 
-            {/* Ajakan ringan jadi affiliate */}
+            {/* Referral CTA */}
             <div
               data-testid="referral-cta-card"
-              className="mt-5 mx-auto max-w-sm bg-[#F5A623]/8 border border-[#F5A623]/30 rounded-xl p-4 text-left"
+              className="mt-4 bg-[#F5A623]/8 border border-[#F5A623]/30 rounded-xl p-3 text-left"
             >
-              <div className="flex items-start gap-3">
-                <div className="text-2xl leading-none">💝</div>
-                <div className="flex-1">
+              <div className="flex items-start gap-2.5">
+                <div className="text-xl leading-none">💝</div>
+                <div className="flex-1 min-w-0">
                   <div className="font-display text-sm text-white">Suka produk CreativeStore?</div>
-                  <p className="text-xs text-white/65 mt-1 leading-relaxed">
+                  <p className="text-[11px] text-white/65 mt-0.5 leading-relaxed">
                     Ajak teman kamu dan dapatkan komisi <b className="text-[#F5A623]">10-15%</b> untuk setiap pembelian!
                   </p>
                   <a
                     href="/partnership"
-                    className="inline-flex items-center gap-1 mt-2 text-xs font-semibold text-[#F5A623] hover:text-[#d98f1a]"
+                    className="inline-flex items-center gap-1 mt-1 text-[11px] font-semibold text-[#F5A623] hover:text-[#d98f1a]"
                   >
-                    Daftar sebagai Affiliate sekarang →
+                    Daftar sebagai Affiliate →
                   </a>
                 </div>
               </div>
             </div>
-
-            <Button
-              onClick={() => handleClose(false)}
-              data-testid="close-order-success-btn"
-              className="mt-5 bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold"
-            >
-              Tutup
-            </Button>
           </div>
         )}
       </DialogContent>
