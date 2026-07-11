@@ -149,7 +149,7 @@ export default function ProductDetail() {
         {/* Photo */}
         <div className="relative aspect-[4/3] rounded-2xl overflow-hidden bg-[#0a0c12] border border-white/5">
           <img
-            src={resolveImageUrl(product.photo_url)}
+            src={resolveImageUrl(product.photo_url) || "https://images.unsplash.com/photo-1625838144804-300f3907c110?w=800"}
             alt={product.name}
             className={`w-full h-full object-cover ${isDraft ? "opacity-40" : ""}`}
             onError={(e) => { e.currentTarget.src = "https://images.unsplash.com/photo-1625838144804-300f3907c110?w=800"; }}

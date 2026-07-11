@@ -83,6 +83,28 @@ Import GitHub repo `https://github.com/noctics77-beep/WebCreative` (branch: main
 - Frontend e2e (testing_agent_v3_fork iteration_3): **100% PASS** after Rp Rp fix
 - Reports: `/app/test_reports/iteration_2.json`, `/app/test_reports/iteration_3.json`
 
+
+### Iteration 9 (Jul 11, 2026) — Product Variants + Banner Countdown
+- [x] **#1 Product Variants System** — new `product_variants` collection with fields (id, product_id, name, price, discount_price, is_recommended, is_best_value, display_order, is_active).
+  - `Product.has_variants` flag toggles variant mode; when active, `original_price` = min(variant effective prices) auto-synced.
+  - Endpoints: `GET /products/{id}/variants` (public), `GET/PUT /admin/products/{id}/variants` (bulk replace with exclusivity enforcement + orphan cleanup).
+  - `POST /orders` accepts `variant_id`; when omitted but product has variants, auto-selects `is_recommended` (or first active). Telegram notif to admin includes `Produk: Name (Variant)`.
+  - `GET /products` enriches has_variants products with `starting_price` + `variant_preview` (max 3 names) + `variant_count`.
+  - Admin ProductFormDialog: new "Variasi Produk" section with inline row editor, exclusivity toggles (⭐ Paling Dipilih / 🔥 Best Value), ▲▼ reorder, add/remove rows.
+  - Storefront ProductCard: shows "Mulai dari Rp X" + chips `[7 Hari] [30 Hari] [90 Hari]` (max 3 + "+X lagi").
+  - ProductDetail: "Pilih Variasi" pill picker with smooth transition + savings display + auto-select recommended.
+  - OrderModal: accepts `variant` prop; shows "Variasi: NAME" pill in ringkasan; sends `variant_id` in POST.
+  - Bulk Import v2: parser upgraded to support `Name :: v1=15000 | v2=40000* | v3=50000**` (* = paling_dipilih, ** = best_value, `50000>40000` = normal>diskon). Legacy flat format `Name | 45000` still works (backward compatible).
+- [x] **#2 Banner Countdown Timer** — Banner model extended with `linked_coupon_code` + `expires_at`. `GET /banners` auto-fills expires_at from linked coupon's valid_until when banner.expires_at is empty (manual override honored).
+  - Admin BannerFormDialog: coupon dropdown (`bf-linked-coupon`) + manual datetime picker (`bf-expires-at`).
+  - New `<BannerCountdown>` component — simple digital-clock style with tick animation, format JJ:MM:DD (Jam:Menit:Detik), shows "Promo Telah Berakhir" state.
+  - Banner CTA click → sessionStorage.cs_pending_coupon = code; OrderModal reads on open → auto-fills discount_code field + toast prompt.
+- [x] Bonus: guarded empty photo_url in ProductDetail img fallback (React empty-src warning fix).
+- [x] Testing_agent_v3_fork iteration_8: **Backend 100% (8/8 pytest), Frontend 100%** — 13/13 parser assertions PASS, all UI flows verified end-to-end.
+
+## Pending User Action (Iteration 9)
+- 🚀 User must **Save to GitHub + Redeploy** production (`creativestore.my.id`) to apply Variants + Countdown features.
+
 ## Pending / Backlog
 ### P1 — Awaiting user input
 - 🔑 Personal `GEMINI_API_KEY` (chat still falls back to "Asisten sedang offline")
