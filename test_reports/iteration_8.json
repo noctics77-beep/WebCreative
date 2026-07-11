@@ -1,0 +1,37 @@
+{
+  "summary": "Iteration 8 — Full E2E validation of Product Variants + Banner Countdown features. Backend: 8/8 pytest PASS (bulk-import-v2, public variants, PUT replace with exclusivity, order with variant_id, order auto-select recommended, /products enrichment, banner CRUD with linked_coupon+expires_at auto-fill, flat non-variant flow). Frontend: bulkImportParser (13/13 assertions PASS including flag suffixes, discount `>` format, legacy flat, exclusivity clamp). UI: storefront product card shows 'Mulai dari Rp 15.000' + variant-chips (7 Hari, 30 Hari, 90 Hari); ProductDetail /produk/test-variant-capcut renders variant-picker with 3 pills, default 30 Hari (recommended), ⭐ PALING DIPILIH + 🔥 BEST VALUE badges visible, clicking 90 Hari updates price to Rp 50.000; OrderModal shows 'Variasi: 90 Hari' pill + Rp 50.000 + order-variant-name testid; BannerCountdown displays 01:59:xx HH:MM:SS format; Banner CTA click → sessionStorage.cs_pending_coupon='HEMAT50' → OrderModal auto-fills discount-code-input with HEMAT50 + toast 'Kode kupon HEMAT50 sudah terisi otomatis'; Admin ProductFormDialog variants-section with 3 rows editable, 'Tambah Variasi' works, ⭐ Paling Dipilih exclusivity enforced (clicking row3 auto-unchecks row2); Admin BulkImport preview parses variant syntax correctly (2 variasi badge + chips w/ fire emoji for best_value); Admin BannerFormDialog has bf-linked-coupon dropdown + bf-expires-at datetime input.",
+  "backend_issues": { "critical": [], "minor": [] },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "WelcomePopup", "issue": "Still overlays /admin login on first visit (carry-over from iter7). User must dismiss before login.", "selector": "[data-testid='welcome-popup-overlay']", "priority": "MEDIUM"},
+      {"component": "img src empty", "issue": "React warning 'An empty string (\"\") was passed to the src attribute' still logged for TEST Variant CapCut (empty photo_url). Carry-over from iter6/iter7.", "selector": "img[src='']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_variants_banners.py",
+    "/app/test_reports/pytest/iter8_variants.xml"
+  ],
+  "action_items": [
+    "(Optional carry-over) Guard WelcomePopup to not render on /admin.",
+    "(Optional carry-over) Skip <img> render when photo_url is empty to eliminate React empty-src warning."
+  ],
+  "critical_code_review_comments": [
+    "Backend variant flow is solid: exclusivity enforced on both PUT (server) and bulk-import parser (client) — server is authoritative and idempotent.",
+    "admin_replace_variants correctly deletes orphan variants, auto-syncs product.has_variants + original_price = min(variant prices).",
+    "POST /orders correctly overrides price using variant.discount_price when set, else variant.price; falls back to recommended variant when variant_id omitted and product.has_variants=true — good UX safety net.",
+    "GET /banners enriches expires_at from linked_coupon.valid_until only when banner.expires_at is empty (manual override honored). Verified via PUT test.",
+    "BannerSlider handleCtaClick correctly uppercases coupon code + sets sessionStorage + shows toast. OrderModal reads sessionStorage on mount and auto-applies.",
+    "Parser edge cases handled: ** wins over * (checked in order), exclusivity clamp on ties, discount `normal>discount` uses discount for starting_price min calculation."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_variants_banners.py"
+  ],
+  "success_rate": { "backend": "100% (8/8 pytest pass)", "frontend": "100% (all data-testid targets + integrations verified end-to-end)" },
+  "test_credentials": "Admin password Blokirsandi12 (from /app/memory/test_credentials.md) — works.",
+  "seed_data_creation": "Created via bulk-import-v2: TEST_V2_CapCutBulk (+3 variants), TEST_V2_FlatProduct — deleted in module teardown. Created coupon TESTHEMAT50 + banner TEST_Banner_Countdown — deleted in teardown. Also created (via curl for UI test) coupon HEMAT50 + banner TEST_Banner_HEMAT50 — deleted post-test. TEST Variant CapCut was temporarily unpublished due to a stray click during admin UI test — REPUBLISHED at end via PATCH /admin/products/{id}/publish-status. Two orders created against TEST Variant CapCut during backend tests (variant + auto-recommended) — retained (no auto-cleanup endpoint used).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "All product-variant + banner-countdown features are working end-to-end. Two carry-over minor issues remain (WelcomePopup on /admin, empty img src warning). TEST Variant CapCut (id e7719282-4b0c-4fe2-b37c-4e878f86d694, slug 'test-variant-capcut') has been re-published and left in place for future use. Data-testids confirmed present: variants-section, variant-picker, variant-option-{id}, variant-chips-{pid}, order-variant-name, banner-countdown, banner-cta-{i}, bf-linked-coupon, bf-expires-at, edit-product-{id}, discount-code-input."
+}

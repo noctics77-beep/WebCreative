@@ -23,9 +23,13 @@ function computeBadges(product) {
 
 export default function ProductCard({ product, onOrder, onWaitlist, query }) {
   const isDraft = product.publish_status === "draft";
+  const hasVariants = !!product.has_variants && (product.variant_count || 0) > 0;
+  const startingPrice = product.starting_price;
   const hasDiscount =
     product.discount_active && product.discount_price && product.discount_price < product.original_price;
-  const finalPrice = hasDiscount ? product.discount_price : product.original_price;
+  const finalPrice = hasVariants
+    ? (startingPrice != null ? startingPrice : product.original_price)
+    : (hasDiscount ? product.discount_price : product.original_price);
   const stockOut =
     !isDraft &&
     product.stock_limit_enabled &&
@@ -105,6 +109,30 @@ export default function ProductCard({ product, onOrder, onWaitlist, query }) {
           <div className="min-w-0 flex-1">
             {isDraft ? (
               <div className="text-xs font-display italic text-white/70">Segera Hadir</div>
+            ) : hasVariants ? (
+              <>
+                <div className="text-[10px] text-white/50 leading-none">Mulai dari</div>
+                <div className="text-sm sm:text-base font-display font-semibold gold-text leading-tight">
+                  {formatIDR(finalPrice)}
+                </div>
+                {product.variant_preview && product.variant_preview.length > 0 && (
+                  <div className="flex flex-wrap gap-0.5 mt-1" data-testid={`variant-chips-${product.id}`}>
+                    {product.variant_preview.slice(0, 3).map((n, i) => (
+                      <span
+                        key={i}
+                        className="text-[8px] leading-none px-1 py-0.5 rounded bg-white/5 border border-white/10 text-white/60"
+                      >
+                        {n}
+                      </span>
+                    ))}
+                    {product.variant_count > 3 && (
+                      <span className="text-[8px] leading-none px-1 py-0.5 rounded bg-white/5 border border-white/10 text-white/50">
+                        +{product.variant_count - 3} lagi
+                      </span>
+                    )}
+                  </div>
+                )}
+              </>
             ) : (
               <>
                 {hasDiscount && (

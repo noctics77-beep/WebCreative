@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import { api, resolveImageUrl } from "@/lib/api";
 import { ChevronLeft, ChevronRight } from "lucide-react";
+import BannerCountdown from "@/components/BannerCountdown";
 
 /**
  * BannerSlider — hero promo slider dengan auto-play, arrow, dots, dan swipe.
@@ -10,6 +12,7 @@ export default function BannerSlider() {
   const [banners, setBanners] = useState([]);
   const [idx, setIdx] = useState(0);
   const [paused, setPaused] = useState(false);
+  const [expiredMap, setExpiredMap] = useState({});
   const touchStartX = useRef(null);
 
   useEffect(() => {
@@ -18,6 +21,26 @@ export default function BannerSlider() {
       .then((r) => setBanners(Array.isArray(r.data) ? r.data : []))
       .catch(() => setBanners([]));
   }, []);
+
+  const handleCtaClick = (e, b) => {
+    // Kalau banner punya kupon aktif (dan belum expired), simpan ke sessionStorage
+    if (b.linked_coupon_code && !expiredMap[b.id]) {
+      try {
+        sessionStorage.setItem("cs_pending_coupon", b.linked_coupon_code.toUpperCase());
+        toast.success(`Kode ${b.linked_coupon_code.toUpperCase()} tersimpan! Akan otomatis terpakai saat kamu order 🎉`);
+      } catch (_) { /* ignore */ }
+    }
+    // Kalau link mengarah ke #anchor di halaman ini, scroll smooth.
+    if (typeof b.cta_link === "string" && b.cta_link.startsWith("#")) {
+      e.preventDefault();
+      const el = document.querySelector(b.cta_link);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  };
+
+  const markExpired = (bannerId) => {
+    setExpiredMap((prev) => (prev[bannerId] ? prev : { ...prev, [bannerId]: true }));
+  };
 
   useEffect(() => {
     if (paused || banners.length < 2) return;
@@ -94,9 +117,15 @@ export default function BannerSlider() {
                   {b.subtitle}
                 </p>
               )}
+              {b.expires_at && (
+                <div className="pt-1">
+                  <BannerCountdown target={b.expires_at} onExpire={() => markExpired(b.id)} />
+                </div>
+              )}
               {b.cta_text && b.cta_link && (
                 <a
                   href={b.cta_link}
+                  onClick={(e) => handleCtaClick(e, b)}
                   data-testid={`banner-cta-${i}`}
                   className="inline-flex items-center gap-1 mt-1 px-3 sm:px-4 py-1.5 sm:py-2 rounded-full bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] text-xs sm:text-sm font-semibold transition-colors"
                 >

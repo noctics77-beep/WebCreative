@@ -11,7 +11,7 @@ import httpx
 import bcrypt
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional
+from typing import Dict, List, Optional
 import uuid
 from datetime import datetime, timezone, timedelta
 from fastapi import Request
@@ -184,6 +184,7 @@ class Product(BaseModel):
     stock_quantity: int = 0  # sisa slot (relevan hanya jika stock_limit_enabled)
     slug: str = ""  # slug untuk URL /produk/[slug]
     display_order: int = 999  # urutan tampil admin (kecil = atas)
+    has_variants: bool = False  # jika True, gunakan tabel product_variants
     created_at: str = Field(default_factory=now_iso)
 
 
@@ -204,6 +205,33 @@ class ProductCreate(BaseModel):
     stock_limit_enabled: bool = False
     stock_quantity: int = 0
     display_order: int = 999
+    has_variants: bool = False
+
+
+# ---------- Product Variants ----------
+class ProductVariant(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    product_id: str
+    name: str
+    price: float = 0.0
+    discount_price: Optional[float] = None
+    is_recommended: bool = False  # "Paling Dipilih"
+    is_best_value: bool = False
+    display_order: int = 100
+    is_active: bool = True
+    created_at: str = Field(default_factory=now_iso)
+
+
+class ProductVariantCreate(BaseModel):
+    id: Optional[str] = None  # optional untuk update in-place
+    name: str
+    price: float = 0.0
+    discount_price: Optional[float] = None
+    is_recommended: bool = False
+    is_best_value: bool = False
+    display_order: int = 100
+    is_active: bool = True
 
 
 class Category(BaseModel):
@@ -335,6 +363,8 @@ class Order(BaseModel):
     referral_affiliate_code: Optional[str] = None
     status: str = "pending"  # pending | confirmed | cancelled | expired
     commission_amount: float = 0.0
+    variant_id: Optional[str] = None
+    variant_name: Optional[str] = None
     created_at: str = Field(default_factory=now_iso)
     # Pakasir automated QRIS fields
     pakasir_amount: Optional[int] = None
@@ -354,6 +384,7 @@ class OrderCreate(BaseModel):
     payment_method: str
     referral_affiliate_code: Optional[str] = None
     discount_code: Optional[str] = None
+    variant_id: Optional[str] = None
 
 
 class Affiliate(BaseModel):
@@ -410,7 +441,6 @@ async def list_products():
         query = {}
     else:
         query = {"publish_status": {"$ne": "draft"}}
-    # Aggregate agar bisa sort: published dulu, lalu by display_order, lalu by created_at desc
     pipeline = [
         {"$match": query},
         {"$addFields": {
@@ -423,7 +453,44 @@ async def list_products():
         {"$project": {"_id": 0, "_status_priority": 0, "_display_order": 0}},
     ]
     products = await db.products.aggregate(pipeline).to_list(1000)
+    # Enrich dengan info variants (starting_price + preview chip names)
+    product_ids = [p["id"] for p in products if p.get("has_variants")]
+    if product_ids:
+        rows = await db.product_variants.find(
+            {"product_id": {"$in": product_ids}, "is_active": True},
+            {"_id": 0},
+        ).sort("display_order", 1).to_list(2000)
+        by_pid: Dict[str, List[dict]] = {}
+        for v in rows:
+            by_pid.setdefault(v["product_id"], []).append(v)
+        for p in products:
+            if not p.get("has_variants"):
+                continue
+            variants = by_pid.get(p["id"], [])
+            if not variants:
+                # Punya toggle has_variants tapi belum ada variant aktif — fallback ke original_price
+                p["variant_count"] = 0
+                p["starting_price"] = p.get("discount_price") if p.get("discount_active") else p.get("original_price", 0)
+                p["variant_preview"] = []
+                continue
+            prices = [
+                (v.get("discount_price") if v.get("discount_price") else v.get("price", 0))
+                for v in variants
+            ]
+            p["variant_count"] = len(variants)
+            p["starting_price"] = min(prices) if prices else 0
+            p["variant_preview"] = [v["name"] for v in variants[:3]]
     return products
+
+
+@api_router.get("/products/{product_id}/variants")
+async def public_list_variants(product_id: str):
+    """Public: variant aktif untuk product detail page."""
+    rows = await db.product_variants.find(
+        {"product_id": product_id, "is_active": True},
+        {"_id": 0},
+    ).sort("display_order", 1).to_list(50)
+    return rows
 
 
 @api_router.get("/products/{product_id}")
@@ -641,6 +708,38 @@ async def create_order(payload: OrderCreate):
         else product["original_price"]
     )
 
+    # Variant selection — override price + append variant name for display
+    variant_doc = None
+    variant_name = None
+    if payload.variant_id:
+        variant_doc = await db.product_variants.find_one(
+            {"id": payload.variant_id, "product_id": product["id"], "is_active": True},
+            {"_id": 0},
+        )
+        if not variant_doc:
+            raise HTTPException(400, "Variasi tidak ditemukan atau tidak aktif")
+        price = (
+            float(variant_doc["discount_price"])
+            if variant_doc.get("discount_price")
+            else float(variant_doc["price"])
+        )
+        variant_name = variant_doc["name"]
+    elif product.get("has_variants"):
+        # Produk punya variasi tapi user tidak pilih — cari default (recommended → first active)
+        active_variants = await db.product_variants.find(
+            {"product_id": product["id"], "is_active": True},
+            {"_id": 0},
+        ).sort("display_order", 1).to_list(50)
+        default = next((v for v in active_variants if v.get("is_recommended")), None) or (
+            active_variants[0] if active_variants else None
+        )
+        if default:
+            variant_doc = default
+            variant_name = default["name"]
+            price = (
+                float(default["discount_price"]) if default.get("discount_price") else float(default["price"])
+            )
+
     # Apply loyalty discount code (10% off)
     if payload.discount_code:
         code = payload.discount_code.strip().upper()
@@ -692,6 +791,8 @@ async def create_order(payload: OrderCreate):
         payment_method=payload.payment_method,
         referral_affiliate_code=referral,
         commission_amount=commission,
+        variant_id=(variant_doc.get("id") if variant_doc else None),
+        variant_name=variant_name,
     )
 
     qr_image = None
@@ -714,12 +815,13 @@ async def create_order(payload: OrderCreate):
 
     await db.orders.insert_one(order.model_dump())
 
+    _display_name = f"{order.product_name} ({variant_name})" if variant_name else order.product_name
     msg = (
         f"<b>🛒 Pesanan Baru — Menunggu Verifikasi Pembayaran</b>\n\n"
         f"<b>Order:</b> {order.order_code}\n"
         f"<b>Nama:</b> {order.buyer_name}\n"
         f"<b>Kontak:</b> {order.contact}\n"
-        f"<b>Produk:</b> {order.product_name}\n"
+        f"<b>Produk:</b> {_display_name}\n"
         f"<b>Harga:</b> Rp {int(price):,}\n"
         f"<b>Pembayaran:</b> {order.payment_method.upper()}\n"
         f"<b>Referral:</b> {referral or '-'}\n\n"
@@ -1044,9 +1146,18 @@ class BulkImportPayload(BaseModel):
     names: List[str]
 
 
+class BulkImportVariantItem(BaseModel):
+    name: str
+    price: float = 0.0
+    discount_price: Optional[float] = None
+    is_recommended: bool = False
+    is_best_value: bool = False
+
+
 class BulkImportItem(BaseModel):
     name: str
     price: float = 0.0
+    variants: List[BulkImportVariantItem] = []
 
 
 class BulkImportFullPayload(BaseModel):
@@ -1148,25 +1259,50 @@ async def admin_bulk_import_v2(
     base_order = int(last.get("display_order", 999) if last else 999) + 1
 
     docs = []
+    variants_to_insert = []
     for i, item in enumerate(payload.items):
         name = item.name.strip()
         if not name:
             continue
         slug = await _generate_unique_slug(name)
-        docs.append(Product(
-            name=name, photo_url="", original_price=float(item.price or 0),
+        has_variants = bool(item.variants and len(item.variants) > 0)
+        # Kalau ada variants → harga produk = harga variant terendah (starting)
+        base_price = float(item.price or 0)
+        if has_variants:
+            prices = [
+                float(v.discount_price if v.discount_price else v.price)
+                for v in item.variants
+            ]
+            base_price = min(prices) if prices else 0.0
+        product = Product(
+            name=name, photo_url="", original_price=base_price,
             discount_price=None, discount_active=False, description="",
             commission_percent=10.0, stock_status="available", monthly_sold=0,
             publish_status="draft", category="lainnya", slug=slug,
-            display_order=base_order + i,
-        ).model_dump())
+            display_order=base_order + i, has_variants=has_variants,
+        )
+        docs.append(product.model_dump())
+        if has_variants:
+            for vi, v in enumerate(item.variants):
+                variants_to_insert.append(ProductVariant(
+                    product_id=product.id,
+                    name=v.name.strip() or f"Variasi {vi + 1}",
+                    price=float(v.price or 0),
+                    discount_price=(float(v.discount_price) if v.discount_price else None),
+                    is_recommended=bool(v.is_recommended),
+                    is_best_value=bool(v.is_best_value),
+                    display_order=vi,
+                    is_active=True,
+                ).model_dump())
 
     if not docs:
         raise HTTPException(400, "Tidak ada item valid")
     await db.products.insert_many(docs)
+    if variants_to_insert:
+        await db.product_variants.insert_many(variants_to_insert)
     for d in docs:
         d.pop("_id", None)
-    return {"created": len(docs), "products": docs}
+    return {"created": len(docs), "variants_created": len(variants_to_insert), "products": docs}
 
 
 @api_router.post("/admin/products/check-duplicates")
@@ -1335,7 +1471,107 @@ async def admin_bulk_publish(
 async def admin_delete_product(product_id: str, x_admin_password: Optional[str] = Header(None)):
     await verify_admin(x_admin_password)
     r = await db.products.delete_one({"id": product_id})
+    # Cascade delete variants
+    await db.product_variants.delete_many({"product_id": product_id})
     return {"deleted": r.deleted_count}
+
+
+# ---------- Admin: Product Variants ----------
+class VariantsBulkReplace(BaseModel):
+    """Replace semua variasi produk dengan daftar baru — support in-place update via `id`."""
+    variants: List[ProductVariantCreate]
+
+
+@api_router.get("/admin/products/{product_id}/variants")
+async def admin_list_variants(product_id: str, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    rows = await db.product_variants.find(
+        {"product_id": product_id},
+        {"_id": 0},
+    ).sort("display_order", 1).to_list(100)
+    return rows
+
+
+@api_router.put("/admin/products/{product_id}/variants")
+async def admin_replace_variants(
+    product_id: str,
+    payload: VariantsBulkReplace,
+    x_admin_password: Optional[str] = Header(None),
+):
+    """Bulk replace: existing variants dengan id → update in-place; tanpa id → insert;
+    variants existing yang tidak ada di payload → dihapus.
+
+    Enforce exclusivity: hanya boleh 1 is_recommended dan 1 is_best_value per produk.
+    """
+    await verify_admin(x_admin_password)
+    prod = await db.products.find_one({"id": product_id}, {"_id": 0})
+    if not prod:
+        raise HTTPException(404, "Produk tidak ditemukan")
+
+    # Enforce exclusivity — jaga urutan: variant pertama yang punya flag = pemenang
+    seen_rec = False
+    seen_bv = False
+    for v in payload.variants:
+        if v.is_recommended:
+            if seen_rec:
+                v.is_recommended = False
+            else:
+                seen_rec = True
+        if v.is_best_value:
+            if seen_bv:
+                v.is_best_value = False
+            else:
+                seen_bv = True
+
+    existing = await db.product_variants.find({"product_id": product_id}, {"_id": 0, "id": 1}).to_list(200)
+    existing_ids = {v["id"] for v in existing}
+    incoming_ids: set[str] = set()
+
+    for idx, v in enumerate(payload.variants):
+        data = {
+            "product_id": product_id,
+            "name": v.name.strip() or f"Variasi {idx + 1}",
+            "price": float(v.price or 0),
+            "discount_price": (float(v.discount_price) if v.discount_price else None),
+            "is_recommended": bool(v.is_recommended),
+            "is_best_value": bool(v.is_best_value),
+            "display_order": int(v.display_order if v.display_order is not None else idx),
+            "is_active": bool(v.is_active),
+        }
+        if v.id and v.id in existing_ids:
+            incoming_ids.add(v.id)
+            await db.product_variants.update_one(
+                {"id": v.id, "product_id": product_id},
+                {"$set": data},
+            )
+        else:
+            new_v = ProductVariant(**data)
+            incoming_ids.add(new_v.id)
+            await db.product_variants.insert_one(new_v.model_dump())
+
+    # Hapus variants yang tidak ada di payload
+    to_delete = existing_ids - incoming_ids
+    if to_delete:
+        await db.product_variants.delete_many({"id": {"$in": list(to_delete)}, "product_id": product_id})
+
+    # Auto-sync product.has_variants + starting price
+    active_variants = await db.product_variants.find(
+        {"product_id": product_id, "is_active": True}, {"_id": 0}
+    ).to_list(100)
+    has_active = len(active_variants) > 0
+    prod_update = {"has_variants": has_active}
+    if has_active:
+        prices = [
+            float(v.get("discount_price") if v.get("discount_price") else v.get("price", 0))
+            for v in active_variants
+        ]
+        prod_update["original_price"] = min(prices) if prices else prod.get("original_price", 0)
+    await db.products.update_one({"id": product_id}, {"$set": prod_update})
+
+    final_rows = await db.product_variants.find(
+        {"product_id": product_id}, {"_id": 0}
+    ).sort("display_order", 1).to_list(100)
+    return {"variants": final_rows, "has_variants": has_active}
 
 
 @api_router.get("/admin/orders")
@@ -2897,6 +3133,9 @@ class Banner(BaseModel):
     cta_link: str = ""
     active: bool = True
     display_order: int = 100
+    # Countdown & coupon linkage
+    linked_coupon_code: str = ""  # kupon yang akan otomatis di-apply saat CTA diklik
+    expires_at: str = ""  # ISO datetime string; kalau kosong & ada linked_coupon → pakai coupon.valid_until
     created_at: str = Field(default_factory=now_iso)
 
 
@@ -2908,12 +3147,24 @@ class BannerCreate(BaseModel):
     cta_link: str = ""
     active: bool = True
     display_order: int = 100
+    linked_coupon_code: str = ""
+    expires_at: str = ""
 
 
 @api_router.get("/banners")
 async def public_list_banners():
-    """Public: banner aktif untuk storefront slider."""
+    """Public: banner aktif untuk storefront slider. Enrich dengan expires_at dari kupon terkait."""
     rows = await db.banners.find({"active": True}, {"_id": 0}).sort("display_order", 1).to_list(20)
+    # Enrich expires_at kalau linked ke kupon tapi banner tidak override manual
+    coupon_codes = list({b.get("linked_coupon_code") for b in rows if b.get("linked_coupon_code")})
+    coupons = {}
+    if coupon_codes:
+        c_rows = await db.coupons.find({"code": {"$in": coupon_codes}}, {"_id": 0}).to_list(50)
+        coupons = {c["code"]: c for c in c_rows}
+    for b in rows:
+        code = b.get("linked_coupon_code")
+        if code and coupons.get(code) and not b.get("expires_at"):
+            b["expires_at"] = coupons[code].get("valid_until") or ""
     return rows
 
 

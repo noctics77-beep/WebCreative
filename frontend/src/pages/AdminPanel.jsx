@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef } from "react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
 import { adminApi, formatIDR, downloadAdminFile, resolveImageUrl } from "@/lib/api";
 import { parseBulkImportText } from "@/lib/bulkImportParser";
 import { Input } from "@/components/ui/input";
@@ -620,6 +620,7 @@ function ProductFormDialog({ open, onOpenChange, editing, categories, api, onSav
     is_promo: !!editing.is_promo,
     stock_limit_enabled: !!editing.stock_limit_enabled,
     stock_quantity: editing.stock_quantity || 0,
+    has_variants: !!editing.has_variants,
   } : {
     name: "",
     photo_url: "",
@@ -630,23 +631,85 @@ function ProductFormDialog({ open, onOpenChange, editing, categories, api, onSav
     commission_percent: 10,
     stock_status: "available",
     monthly_sold: 0,
-    publish_status: "draft", // DEFAULT DRAFT untuk produk baru
+    publish_status: "draft",
     category: "lainnya",
     is_bestseller: false,
     is_promo: false,
     stock_limit_enabled: false,
     stock_quantity: 0,
+    has_variants: false,
   });
   const [saving, setSaving] = useState(false);
+  const [variants, setVariants] = useState([]);
+  const [variantsLoading, setVariantsLoading] = useState(false);
+
+  // Load existing variants when editing
+  useEffect(() => {
+    if (!editing?.id) { setVariants([]); return; }
+    setVariantsLoading(true);
+    api.get(`/admin/products/${editing.id}/variants`)
+      .then((r) => setVariants(r.data || []))
+      .catch(() => setVariants([]))
+      .finally(() => setVariantsLoading(false));
+  }, [editing, api]);
+
+  const addVariant = () => {
+    setVariants((prev) => [
+      ...prev,
+      {
+        id: null,
+        name: "",
+        price: 0,
+        discount_price: null,
+        is_recommended: false,
+        is_best_value: false,
+        display_order: prev.length,
+        is_active: true,
+      },
+    ]);
+  };
+  const updateVariant = (idx, patch) => {
+    setVariants((prev) => {
+      const next = [...prev];
+      next[idx] = { ...next[idx], ...patch };
+      // Enforce exclusivity for is_recommended and is_best_value
+      if (patch.is_recommended === true) {
+        next.forEach((v, i) => { if (i !== idx) v.is_recommended = false; });
+      }
+      if (patch.is_best_value === true) {
+        next.forEach((v, i) => { if (i !== idx) v.is_best_value = false; });
+      }
+      return next;
+    });
+  };
+  const removeVariant = (idx) => {
+    setVariants((prev) => prev.filter((_, i) => i !== idx));
+  };
+  const moveVariant = (idx, dir) => {
+    setVariants((prev) => {
+      const j = idx + dir;
+      if (j < 0 || j >= prev.length) return prev;
+      const next = [...prev];
+      [next[idx], next[j]] = [next[j], next[idx]];
+      return next.map((v, i) => ({ ...v, display_order: i }));
+    });
+  };
 
   const save = async (e) => {
     e.preventDefault();
-    if (!form.name || !form.photo_url || !form.original_price) return toast.error("Lengkapi data wajib");
+    if (!form.name || !form.photo_url) return toast.error("Lengkapi nama & foto produk");
+    // Kalau has_variants, harga utama boleh 0 (akan di-override server). Kalau tidak, wajib.
+    if (!form.has_variants && !form.original_price) return toast.error("Isi harga produk");
+    if (form.has_variants) {
+      const activeVars = variants.filter((v) => v.is_active);
+      if (activeVars.length === 0) return toast.error("Aktifkan minimal 1 variasi atau matikan toggle 'Punya variasi'");
+      if (activeVars.some((v) => !v.name || !v.price)) return toast.error("Setiap variasi wajib punya nama & harga");
+    }
     setSaving(true);
     const payload = {
       name: form.name,
       photo_url: form.photo_url,
-      original_price: parseFloat(form.original_price),
+      original_price: parseFloat(form.original_price || 0),
       discount_price: form.discount_price ? parseFloat(form.discount_price) : null,
       discount_active: form.discount_active,
       description: form.description,
@@ -659,11 +722,30 @@ function ProductFormDialog({ open, onOpenChange, editing, categories, api, onSav
       is_promo: form.is_promo,
       stock_limit_enabled: form.stock_limit_enabled,
       stock_quantity: parseInt(form.stock_quantity || 0, 10),
+      has_variants: form.has_variants,
     };
     try {
+      let productId = editing?.id;
       if (editing) await api.put(`/admin/products/${editing.id}`, payload);
-      else await api.post("/admin/products", payload);
-      toast.success(editing ? "Produk diupdate" : "Produk ditambahkan (default: Draft)");
+      else {
+        const res = await api.post("/admin/products", payload);
+        productId = res.data.id;
+      }
+      // Persist variants (bulk replace) — hanya kalau produk punya id
+      if (productId) {
+        const variantPayload = variants.map((v, idx) => ({
+          id: v.id || undefined,
+          name: v.name,
+          price: parseFloat(v.price || 0),
+          discount_price: v.discount_price ? parseFloat(v.discount_price) : null,
+          is_recommended: !!v.is_recommended,
+          is_best_value: !!v.is_best_value,
+          display_order: idx,
+          is_active: !!v.is_active,
+        }));
+        await api.put(`/admin/products/${productId}/variants`, { variants: variantPayload });
+      }
+      toast.success(editing ? "Produk diupdate" : "Produk ditambahkan");
       onSaved();
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Gagal menyimpan");
@@ -709,24 +791,138 @@ function ProductFormDialog({ open, onOpenChange, editing, categories, api, onSav
               </Select>
             </Field>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Harga Asli">
-              <Input data-testid="pf-original-price" type="number" value={form.original_price} onChange={(e) => setForm({ ...form, original_price: e.target.value })}
-                className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]" />
-            </Field>
-            <Field label="Harga Diskon (opsional)">
-              <Input data-testid="pf-discount-price" type="number" value={form.discount_price} onChange={(e) => setForm({ ...form, discount_price: e.target.value })}
-                className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]" />
-            </Field>
-          </div>
-          <div className="flex items-center justify-between px-3 py-2 rounded-md bg-[#0f1117] border border-white/10">
-            <Label className="text-sm">Aktifkan Diskon (Flash Sale otomatis)</Label>
-            <Switch
-              data-testid="pf-discount-active"
-              checked={form.discount_active}
-              onCheckedChange={(v) => setForm({ ...form, discount_active: v })}
-              className="data-[state=checked]:bg-[#F5A623]"
-            />
+          {!form.has_variants && (
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Harga Asli">
+                <Input data-testid="pf-original-price" type="number" value={form.original_price} onChange={(e) => setForm({ ...form, original_price: e.target.value })}
+                  className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]" />
+              </Field>
+              <Field label="Harga Diskon (opsional)">
+                <Input data-testid="pf-discount-price" type="number" value={form.discount_price} onChange={(e) => setForm({ ...form, discount_price: e.target.value })}
+                  className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]" />
+              </Field>
+            </div>
+          )}
+          {!form.has_variants && (
+            <div className="flex items-center justify-between px-3 py-2 rounded-md bg-[#0f1117] border border-white/10">
+              <Label className="text-sm">Aktifkan Diskon (Flash Sale otomatis)</Label>
+              <Switch
+                data-testid="pf-discount-active"
+                checked={form.discount_active}
+                onCheckedChange={(v) => setForm({ ...form, discount_active: v })}
+                className="data-[state=checked]:bg-[#F5A623]"
+              />
+            </div>
+          )}
+
+          {/* Variasi Produk section */}
+          <div className="rounded-md bg-[#0f1117] border border-white/10 p-3 space-y-3" data-testid="variants-section">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="text-sm">🎯 Produk Punya Variasi</Label>
+                <p className="text-[10px] text-white/50 mt-0.5">Aktifkan kalau produk punya beberapa opsi (misal: 30 Hari, 90 Hari, 1 Tahun).</p>
+              </div>
+              <Switch
+                data-testid="pf-has-variants"
+                checked={form.has_variants}
+                onCheckedChange={(v) => setForm({ ...form, has_variants: v })}
+                className="data-[state=checked]:bg-[#F5A623]"
+              />
+            </div>
+            {form.has_variants && (
+              <div className="space-y-2 pt-2 border-t border-white/5" data-testid="variants-table">
+                {variantsLoading && <p className="text-xs text-white/50">Memuat variasi…</p>}
+                {variants.length === 0 && !variantsLoading && (
+                  <p className="text-xs text-white/45">Belum ada variasi. Klik &quot;+ Tambah Variasi&quot; untuk mulai.</p>
+                )}
+                {variants.map((v, idx) => (
+                  <div
+                    key={v.id || `new-${idx}`}
+                    data-testid={`variant-row-${idx}`}
+                    className={`rounded-lg border p-2 space-y-2 ${v.is_active ? "border-white/10 bg-[#1a1d27]" : "border-white/5 bg-[#0f1117] opacity-60"}`}
+                  >
+                    <div className="grid grid-cols-12 gap-2 items-center">
+                      <Input
+                        data-testid={`variant-name-${idx}`}
+                        placeholder="Nama variasi (30 Hari)"
+                        value={v.name}
+                        onChange={(e) => updateVariant(idx, { name: e.target.value })}
+                        className="col-span-4 bg-[#0f1117] border-white/15 h-8 text-xs"
+                      />
+                      <Input
+                        data-testid={`variant-price-${idx}`}
+                        type="number"
+                        placeholder="Harga normal"
+                        value={v.price || ""}
+                        onChange={(e) => updateVariant(idx, { price: e.target.value })}
+                        className="col-span-3 bg-[#0f1117] border-white/15 h-8 text-xs"
+                      />
+                      <Input
+                        data-testid={`variant-discount-${idx}`}
+                        type="number"
+                        placeholder="Diskon (opsional)"
+                        value={v.discount_price || ""}
+                        onChange={(e) => updateVariant(idx, { discount_price: e.target.value ? parseFloat(e.target.value) : null })}
+                        className="col-span-3 bg-[#0f1117] border-white/15 h-8 text-xs"
+                      />
+                      <div className="col-span-2 flex items-center gap-0.5 justify-end">
+                        <button type="button" onClick={() => moveVariant(idx, -1)} className="p-1 rounded hover:bg-white/5 text-white/50" title="Naik">▲</button>
+                        <button type="button" onClick={() => moveVariant(idx, 1)} className="p-1 rounded hover:bg-white/5 text-white/50" title="Turun">▼</button>
+                        <button
+                          type="button"
+                          onClick={() => removeVariant(idx)}
+                          data-testid={`variant-remove-${idx}`}
+                          className="p-1 rounded hover:bg-red-500/20 text-red-300"
+                          title="Hapus"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3 text-[10px]">
+                      <label className="flex items-center gap-1 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          data-testid={`variant-recommended-${idx}`}
+                          checked={!!v.is_recommended}
+                          onChange={(e) => updateVariant(idx, { is_recommended: e.target.checked })}
+                          className="accent-[#F5A623]"
+                        />
+                        <span className="text-[#F5A623]">⭐ Paling Dipilih</span>
+                      </label>
+                      <label className="flex items-center gap-1 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          data-testid={`variant-bestvalue-${idx}`}
+                          checked={!!v.is_best_value}
+                          onChange={(e) => updateVariant(idx, { is_best_value: e.target.checked })}
+                          className="accent-red-500"
+                        />
+                        <span className="text-red-300">🔥 Best Value</span>
+                      </label>
+                      <label className="flex items-center gap-1 cursor-pointer ml-auto">
+                        <input
+                          type="checkbox"
+                          data-testid={`variant-active-${idx}`}
+                          checked={!!v.is_active}
+                          onChange={(e) => updateVariant(idx, { is_active: e.target.checked })}
+                          className="accent-green-500"
+                        />
+                        <span className="text-white/60">Aktif</span>
+                      </label>
+                    </div>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={addVariant}
+                  data-testid="variant-add-btn"
+                  className="w-full text-xs py-2 rounded-md border border-dashed border-white/15 text-white/60 hover:border-[#F5A623]/40 hover:text-[#F5A623] transition-colors"
+                >
+                  + Tambah Variasi
+                </button>
+              </div>
+            )}
           </div>
           <Field label="Deskripsi Singkat">
             <Textarea data-testid="pf-description" rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}
@@ -912,9 +1108,12 @@ function BulkImportDialog({ open, onOpenChange, api, onImported }) {
         <DialogHeader>
           <DialogTitle className="font-display text-xl">Import Produk Massal</DialogTitle>
           <p className="text-xs text-white/55">
-            Format: <code className="text-[#F5A623]">Nama Produk | 150000</code>, atau{" "}
-            <code className="text-[#F5A623]">Nama Produk | 150rb</code>, atau nama saja.
-            Prefix <code>➥ - • * &gt; # + 1.</code> auto-strip.
+            Format flat: <code className="text-[#F5A623]">Nama Produk | 150000</code>. Prefix <code>➥ - • * &gt; # + 1.</code> auto-strip.
+          </p>
+          <p className="text-xs text-white/55 mt-1">
+            Format variasi: <code className="text-[#F5A623]">Nama :: 7 Hari=15000 | 30 Hari=40000* | 90 Hari=50000**</code>
+            <br />
+            <span className="text-white/40">* = Paling Dipilih • ** = Best Value • harga_normal&gt;harga_diskon untuk diskon per variasi</span>
           </p>
         </DialogHeader>
 
@@ -974,8 +1173,10 @@ function BulkImportDialog({ open, onOpenChange, api, onImported }) {
                       const bgCls = dup?.status === "exact" ? "bg-red-500/10 border-red-500/30" :
                                     dup?.status === "similar" ? "bg-amber-500/10 border-amber-500/30" :
                                     "bg-[#1a1d27] border-white/5";
+                      const hasVariants = Array.isArray(it.variants) && it.variants.length > 0;
                       return (
-                        <tr key={idx} className={`border-b ${bgCls}`}>
+                        <React.Fragment key={idx}>
+                        <tr className={`border-b ${bgCls}`}>
                           <td className="px-2 py-1.5">
                             {dup && (
                               <div className="flex items-center gap-1 mb-0.5">
@@ -990,10 +1191,17 @@ function BulkImportDialog({ open, onOpenChange, api, onImported }) {
                                 </span>
                               </div>
                             )}
-                            <div className="text-white/85 truncate">{it.name}</div>
+                            <div className="text-white/85 truncate flex items-center gap-1">
+                              {it.name}
+                              {hasVariants && (
+                                <span className="text-[9px] px-1 rounded bg-[#F5A623]/15 text-[#F5A623] border border-[#F5A623]/30" data-testid={`variant-count-${idx}`}>
+                                  {it.variants.length} variasi
+                                </span>
+                              )}
+                            </div>
                           </td>
                           <td className="text-right px-2 py-1.5 text-white/70 whitespace-nowrap">
-                            {it.price > 0 ? `Rp ${it.price.toLocaleString("id-ID")}` : "-"}
+                            {it.price > 0 ? (hasVariants ? `mulai Rp ${it.price.toLocaleString("id-ID")}` : `Rp ${it.price.toLocaleString("id-ID")}`) : "-"}
                           </td>
                           <td className="px-1">
                             <button onClick={() => removeItem(idx)} className="p-1 text-white/40 hover:text-red-300">
@@ -1001,6 +1209,36 @@ function BulkImportDialog({ open, onOpenChange, api, onImported }) {
                             </button>
                           </td>
                         </tr>
+                        {hasVariants && (
+                          <tr className="border-b border-white/5">
+                            <td colSpan={3} className="px-2 pb-2 pt-0">
+                              <div className="flex flex-wrap gap-1" data-testid={`variant-preview-${idx}`}>
+                                {it.variants.map((v, vi) => (
+                                  <span
+                                    key={vi}
+                                    className={`text-[10px] px-1.5 py-0.5 rounded border ${
+                                      v.is_recommended
+                                        ? "bg-[#F5A623]/15 border-[#F5A623]/40 text-[#F5A623]"
+                                        : v.is_best_value
+                                        ? "bg-red-500/15 border-red-500/40 text-red-300"
+                                        : "bg-white/5 border-white/15 text-white/70"
+                                    }`}
+                                  >
+                                    {v.name}: Rp {(v.discount_price || v.price).toLocaleString("id-ID")}
+                                    {v.discount_price && (
+                                      <span className="line-through text-white/30 ml-1">
+                                        Rp {v.price.toLocaleString("id-ID")}
+                                      </span>
+                                    )}
+                                    {v.is_recommended && " ⭐"}
+                                    {v.is_best_value && " 🔥"}
+                                  </span>
+                                ))}
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                        </React.Fragment>
                       );
                     })}
                   </tbody>
@@ -1131,7 +1369,7 @@ function PhotoPicker({ value, onChange, api }) {
           />
           <p className="text-[10px] text-white/45 leading-relaxed">
             💡 Tip: pakai link <b>direct image</b> (URL berakhiran <code>.jpg</code>/<code>.png</code>/<code>.webp</code>).
-            Google Drive share-link akan otomatis dinormalisasi. Untuk imgbb, pilih menu <b>"Direct link"</b>.
+            Google Drive share-link akan otomatis dinormalisasi. Untuk imgbb, pilih menu <b>&quot;Direct link&quot;</b>.
           </p>
         </>
       ) : (
@@ -3846,16 +4084,24 @@ function BannersTab({ api }) {
 }
 
 function BannerFormDialog({ open, onOpenChange, editing, api, onSaved }) {
-  const [form, setForm] = useState(() => editing || {
-    image_url: "",
-    title: "",
-    subtitle: "",
-    cta_text: "",
-    cta_link: "",
-    active: true,
-    display_order: 100,
-  });
+  const [form, setForm] = useState(() => ({
+    image_url: editing?.image_url || "",
+    title: editing?.title || "",
+    subtitle: editing?.subtitle || "",
+    cta_text: editing?.cta_text || "",
+    cta_link: editing?.cta_link || "",
+    active: editing?.active !== undefined ? editing.active : true,
+    display_order: editing?.display_order || 100,
+    linked_coupon_code: editing?.linked_coupon_code || "",
+    expires_at: editing?.expires_at || "",
+  }));
   const [saving, setSaving] = useState(false);
+  const [coupons, setCoupons] = useState([]);
+
+  useEffect(() => {
+    if (!open) return;
+    api.get("/admin/coupons").then((r) => setCoupons((r.data || []).filter((c) => c.active))).catch(() => setCoupons([]));
+  }, [open, api]);
 
   const save = async (e) => {
     e.preventDefault();
@@ -3869,6 +4115,8 @@ function BannerFormDialog({ open, onOpenChange, editing, api, onSaved }) {
         cta_link: form.cta_link,
         active: !!form.active,
         display_order: parseInt(form.display_order || 100, 10),
+        linked_coupon_code: (form.linked_coupon_code || "").toUpperCase(),
+        expires_at: form.expires_at || "",
       };
       if (editing) await api.put(`/admin/banners/${editing.id}`, payload);
       else await api.post("/admin/banners", payload);
@@ -3901,13 +4149,52 @@ function BannerFormDialog({ open, onOpenChange, editing, api, onSaved }) {
           <div className="grid grid-cols-2 gap-3">
             <Field label="Teks CTA (opsional)">
               <Input data-testid="bf-cta-text" value={form.cta_text} onChange={(e) => setForm({ ...form, cta_text: e.target.value })}
-                className="bg-[#0f1117] border-white/15" />
+                placeholder="Pakai Kode: HEMAT50" className="bg-[#0f1117] border-white/15" />
             </Field>
             <Field label="Link CTA (opsional)">
               <Input data-testid="bf-cta-link" value={form.cta_link} onChange={(e) => setForm({ ...form, cta_link: e.target.value })}
-                placeholder="/partnership atau https://…" className="bg-[#0f1117] border-white/15" />
+                placeholder="#products atau https://…" className="bg-[#0f1117] border-white/15" />
             </Field>
           </div>
+
+          <div className="rounded-md bg-[#0f1117] border border-white/10 p-3 space-y-3">
+            <div>
+              <Label className="text-sm">⏱️ Countdown Timer (opsional)</Label>
+              <p className="text-[10px] text-white/50 mt-0.5">
+                Kalau banner promo terbatas waktu, link ke kupon aktif (expires_at otomatis) atau set manual.
+              </p>
+            </div>
+            <Field label="Kupon Terkait (opsional)">
+              <Select
+                value={form.linked_coupon_code || "__none__"}
+                onValueChange={(v) => setForm({ ...form, linked_coupon_code: v === "__none__" ? "" : v })}
+              >
+                <SelectTrigger data-testid="bf-linked-coupon" className="bg-[#1a1d27] border-white/15">
+                  <SelectValue placeholder="— Tidak dilink —" />
+                </SelectTrigger>
+                <SelectContent className="bg-[#1a1d27] border-white/10 text-white">
+                  <SelectItem value="__none__">— Tidak dilink —</SelectItem>
+                  {coupons.map((c) => (
+                    <SelectItem key={c.code} value={c.code}>
+                      {c.code} ({c.discount_type === "percentage" ? `${c.discount_value}%` : formatIDR(c.discount_value)})
+                      {c.valid_until ? ` — exp ${new Date(c.valid_until).toLocaleDateString("id-ID")}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+            <Field label="Expired Manual (opsional, override kupon)">
+              <Input
+                data-testid="bf-expires-at"
+                type="datetime-local"
+                value={form.expires_at ? form.expires_at.slice(0, 16) : ""}
+                onChange={(e) => setForm({ ...form, expires_at: e.target.value ? new Date(e.target.value).toISOString() : "" })}
+                className="bg-[#1a1d27] border-white/15"
+              />
+              <p className="text-[10px] text-white/45 mt-1">Kalau diisi, override tanggal expired dari kupon.</p>
+            </Field>
+          </div>
+
           <div className="grid grid-cols-2 gap-3 items-end">
             <Field label="Urutan Tampil">
               <Input type="number" data-testid="bf-order" value={form.display_order} onChange={(e) => setForm({ ...form, display_order: e.target.value })}

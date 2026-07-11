@@ -53,6 +53,8 @@ export default function ProductDetail() {
   const [loading, setLoading] = useState(true);
   const [showOrder, setShowOrder] = useState(false);
   const [showWaitlist, setShowWaitlist] = useState(false);
+  const [variants, setVariants] = useState([]);
+  const [selectedVariantId, setSelectedVariantId] = useState(null);
 
   useEffect(() => {
     setLoading(true);
@@ -63,6 +65,18 @@ export default function ProductDetail() {
       .then(([pr, cr]) => {
         setProduct(pr.data);
         setCategories(cr.data);
+        if (pr.data?.has_variants) {
+          return api.get(`/products/${pr.data.id}/variants`).then((vr) => {
+            const list = vr.data || [];
+            setVariants(list);
+            const recommended = list.find((v) => v.is_recommended);
+            const first = list[0];
+            setSelectedVariantId((recommended || first)?.id || null);
+          });
+        } else {
+          setVariants([]);
+          setSelectedVariantId(null);
+        }
       })
       .catch(() => setProduct(null))
       .finally(() => setLoading(false));
@@ -90,8 +104,20 @@ export default function ProductDetail() {
   }
 
   const isDraft = product.publish_status === "draft";
+  const hasVariants = !!product.has_variants && variants.length > 0;
+  const selectedVariant = hasVariants
+    ? (variants.find((v) => v.id === selectedVariantId) || variants[0])
+    : null;
   const hasDiscount = product.discount_active && product.discount_price;
-  const finalPrice = hasDiscount ? product.discount_price : product.original_price;
+  const variantEffectivePrice = selectedVariant
+    ? (selectedVariant.discount_price || selectedVariant.price)
+    : null;
+  const variantSavings = selectedVariant?.discount_price
+    ? Math.max(0, selectedVariant.price - selectedVariant.discount_price)
+    : 0;
+  const finalPrice = hasVariants
+    ? variantEffectivePrice
+    : (hasDiscount ? product.discount_price : product.original_price);
   const badges = computeBadges(product);
   const { intro, features } = parseFeatures(product.description);
   const catName = categories.find((c) => c.slug === product.category)?.name || "Lainnya";
@@ -146,6 +172,26 @@ export default function ProductDetail() {
           <div className="mt-4">
             {isDraft ? (
               <div className="text-2xl font-display italic text-white/70">Segera Hadir</div>
+            ) : hasVariants ? (
+              <>
+                {selectedVariant?.discount_price && selectedVariant?.price > selectedVariant.discount_price && (
+                  <div className="text-white/40 line-through text-sm">{formatIDR(selectedVariant.price)}</div>
+                )}
+                <div
+                  className="text-3xl md:text-4xl font-display font-semibold gold-text transition-all duration-300"
+                  data-testid="detail-price-display"
+                >
+                  {formatIDR(finalPrice)}
+                </div>
+                {variantSavings > 0 && (
+                  <div className="mt-1 text-xs text-green-300" data-testid="variant-savings">
+                    Hemat {formatIDR(variantSavings)}
+                  </div>
+                )}
+                <div className="mt-2">
+                  <StockBadge product={product} size="lg" />
+                </div>
+              </>
             ) : (
               <>
                 {hasDiscount && (
@@ -158,6 +204,64 @@ export default function ProductDetail() {
               </>
             )}
           </div>
+
+          {/* Variant picker */}
+          {hasVariants && (
+            <div className="mt-6" data-testid="variant-picker">
+              <h3 className="text-xs uppercase tracking-widest text-white/50 mb-2">Pilih Variasi</h3>
+              <div className="flex flex-wrap gap-2">
+                {variants.map((v) => {
+                  const selected = v.id === selectedVariant?.id;
+                  const price = v.discount_price || v.price;
+                  return (
+                    <button
+                      key={v.id}
+                      type="button"
+                      data-testid={`variant-option-${v.id}`}
+                      onClick={() => setSelectedVariantId(v.id)}
+                      className={`relative px-3 py-2 rounded-xl border transition-all duration-200 text-left ${
+                        selected
+                          ? "border-[#F5A623] bg-[#F5A623]/10 shadow-[0_0_0_2px_rgba(245,166,35,0.15)] scale-[1.02]"
+                          : "border-white/10 bg-[#0f1117] hover:border-white/25"
+                      } ${v.is_recommended ? "ring-1 ring-[#F5A623]/40" : ""}`}
+                    >
+                      <div className="flex flex-col items-start">
+                        <span className={`text-xs font-medium ${selected ? "text-white" : "text-white/80"}`}>
+                          {v.name}
+                        </span>
+                        <div className="mt-0.5 flex items-baseline gap-1">
+                          {v.discount_price && v.price > v.discount_price && (
+                            <span className="text-[10px] text-white/40 line-through">
+                              {formatIDR(v.price)}
+                            </span>
+                          )}
+                          <span className={`text-sm font-semibold ${selected ? "gold-text" : "text-white/90"}`}>
+                            {formatIDR(price)}
+                          </span>
+                        </div>
+                      </div>
+                      {v.is_recommended && (
+                        <span
+                          data-testid={`variant-recommended-badge-${v.id}`}
+                          className="absolute -top-2 left-2 text-[9px] leading-none px-1.5 py-0.5 rounded-full bg-[#F5A623] text-[#0f1117] font-bold whitespace-nowrap uppercase tracking-wider"
+                        >
+                          ⭐ Paling Dipilih
+                        </span>
+                      )}
+                      {v.is_best_value && (
+                        <span
+                          data-testid={`variant-bestvalue-badge-${v.id}`}
+                          className="absolute -top-2 right-2 text-[9px] leading-none px-1.5 py-0.5 rounded-full bg-red-500 text-white font-bold whitespace-nowrap uppercase tracking-wider"
+                        >
+                          🔥 Best Value
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {intro && (
             <p className="mt-6 text-white/80 leading-relaxed whitespace-pre-line">{intro}</p>
@@ -211,6 +315,7 @@ export default function ProductDetail() {
       <OrderModal
         open={showOrder}
         product={product}
+        variant={selectedVariant}
         referral={referral}
         onClose={() => setShowOrder(false)}
       />

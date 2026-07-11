@@ -27,7 +27,7 @@ const PAYMENT_OPTIONS = [
   { value: "transfer", label: "Transfer Bank" },
 ];
 
-export default function OrderModal({ open, onClose, product, referral }) {
+export default function OrderModal({ open, onClose, product, variant, referral }) {
   const [form, setForm] = useState({
     buyer_name: "",
     contact: "",
@@ -61,6 +61,14 @@ export default function OrderModal({ open, onClose, product, referral }) {
       if (product) {
         trackViewContent(product);
       }
+      // Auto-fill kupon dari sessionStorage (di-set oleh BannerSlider saat click CTA)
+      try {
+        const pending = sessionStorage.getItem("cs_pending_coupon");
+        if (pending && !form.discount_code) {
+          setForm((prev) => ({ ...prev, discount_code: pending }));
+          toast.info(`Kode kupon ${pending} sudah terisi otomatis, klik "Pakai" untuk aktifkan 🎉`);
+        }
+      } catch (_) { /* storage disabled */ }
     }
   }, [open, product]);
 
@@ -132,9 +140,15 @@ export default function OrderModal({ open, onClose, product, referral }) {
   }, [step, form.payment_method, orderCode, autoPaid, expired]);
 
   if (!product) return null;
+  // Variant-aware pricing — if variant given, override product price
   const hasDiscount =
-    product.discount_active && product.discount_price < product.original_price;
-  const basePrice = hasDiscount ? product.discount_price : product.original_price;
+    !variant && product.discount_active && product.discount_price < product.original_price;
+  const variantBase = variant
+    ? (variant.discount_price || variant.price || 0)
+    : null;
+  const basePrice = variant
+    ? variantBase
+    : (hasDiscount ? product.discount_price : product.original_price);
   // Support 2 tipe: loyalty (percentage) atau coupon voucher (percentage/nominal)
   const finalPrice = discountInfo?.valid
     ? (discountInfo.discount_amount != null
@@ -205,6 +219,7 @@ export default function OrderModal({ open, onClose, product, referral }) {
     product_id: product.id,
     referral_affiliate_code: referral || null,
     discount_code: discountInfo?.valid ? form.discount_code.trim().toUpperCase() : null,
+    variant_id: variant?.id || null,
   });
 
   const submit = async (e) => {
@@ -332,8 +347,21 @@ export default function OrderModal({ open, onClose, product, referral }) {
                   >
                     {product.name}
                   </p>
+                  {variant?.name && (
+                    <p
+                      data-testid="order-variant-name"
+                      className="text-[11px] mt-0.5 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-[#F5A623]/15 border border-[#F5A623]/30 text-[#F5A623]"
+                    >
+                      Variasi: <b>{variant.name}</b>
+                    </p>
+                  )}
                   <div className="flex items-baseline gap-2 mt-1" data-testid="order-product-price-block">
-                    {hasDiscount && (
+                    {variant?.discount_price && variant?.price > variant.discount_price && (
+                      <span className="text-xs text-white/40 line-through">
+                        {formatIDR(variant.price)}
+                      </span>
+                    )}
+                    {!variant && hasDiscount && (
                       <span className="text-xs text-white/40 line-through">
                         {formatIDR(product.original_price)}
                       </span>
@@ -342,7 +370,7 @@ export default function OrderModal({ open, onClose, product, referral }) {
                       {formatIDR(basePrice)}
                     </span>
                   </div>
-                  {product.description && (
+                  {product.description && !variant && (
                     <p className="text-xs text-white/55 mt-1.5 line-clamp-2">
                       {product.description}
                     </p>
