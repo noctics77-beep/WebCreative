@@ -2098,17 +2098,26 @@ function SettingsTab({ api }) {
         </Field>
 
         <h3 className="font-display text-lg pt-4">Pengaturan Pembayaran</h3>
-        <Field label="URL Gambar QRIS">
-          <Input
-            data-testid="settings-qris-url-input"
+        <Field label="Gambar QRIS Manual">
+          <PhotoPicker
             value={stats.qris_url || ""}
-            onChange={(e) => setStats({ ...stats, qris_url: e.target.value })}
-            placeholder="https://..."
-            className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
+            onChange={(url) => setStats({ ...stats, qris_url: url })}
+            api={api}
           />
         </Field>
         {stats.qris_url && (
-          <img src={stats.qris_url} alt="QRIS Preview" className="max-w-[180px] rounded-lg border border-white/10 bg-white p-2" />
+          <div className="flex items-start gap-3 mt-1">
+            <img
+              src={resolveImageUrl(stats.qris_url)}
+              alt="QRIS Preview"
+              className="max-w-[180px] rounded-lg border border-white/10 bg-white p-2"
+              onError={(e) => { e.currentTarget.style.display = "none"; }}
+            />
+            <div className="text-[10px] text-white/50 leading-relaxed">
+              QR ini akan ditampilkan di halaman order saat pembeli pilih metode <b>QRIS Manual</b>.
+              Pastikan QR dari akun merchant kamu ya, Sobat Creative 💛
+            </div>
+          </div>
         )}
         <div className="space-y-2">
           <Label className="text-xs uppercase tracking-widest text-white/60">Daftar Rekening Bank</Label>

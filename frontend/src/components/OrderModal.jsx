@@ -624,10 +624,11 @@ export default function OrderModal({ open, onClose, product, variant, referral }
               paySettings.qris_url ? (
                 <div className="text-center">
                   <img
-                    src={paySettings.qris_url}
+                    src={resolveImageUrl(paySettings.qris_url)}
                     alt="QRIS"
                     data-testid="qris-image"
                     className="mx-auto max-w-[260px] w-full rounded-xl border border-white/10 bg-white p-3"
+                    onError={(e) => { e.currentTarget.style.display = "none"; }}
                   />
                   <p className="text-xs text-white/50 mt-2">
                     Scan QRIS di atas dengan aplikasi e-wallet/bank kamu.
