@@ -1,4 +1,21 @@
 import React, { useEffect, useState, useMemo, useRef } from "react";
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+  arrayMove,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { adminApi, formatIDR, downloadAdminFile, resolveImageUrl } from "@/lib/api";
 import { parseBulkImportText } from "@/lib/bulkImportParser";
 import ObjectPositionPicker from "@/components/ObjectPositionPicker";
@@ -36,7 +53,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Edit, LogOut, Plus, Trash2, Loader2, Check, X, Download, Search, Upload, Link2, Image as ImageIcon, Eye, EyeOff, Filter, Sparkles, Copy, RefreshCw, Bell, Tag, Star, HelpCircle, Info } from "lucide-react";
+import { Edit, LogOut, Plus, Trash2, Loader2, Check, X, Download, Search, Upload, Link2, Image as ImageIcon, Eye, EyeOff, Filter, Sparkles, Copy, RefreshCw, Bell, Tag, Star, HelpCircle, Info, GripVertical, ChevronLeft, ChevronRight } from "lucide-react";
 
 export default function AdminPanel() {
   const [password, setPassword] = useState(localStorage.getItem("cs_admin_pw") || "");
@@ -207,6 +224,15 @@ function ProductsTab({ api }) {
   const [filter, setFilter] = useState("all"); // all | published | draft
   const [selectedIds, setSelectedIds] = useState(new Set());
   const [generateOpen, setGenerateOpen] = useState(false);
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 20;
+
+  // DnD sensors — pointer 8px minimum (avoid confusing with clicks) + touch long-press 300ms
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 300, tolerance: 8 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+  );
 
   const load = () => api.get("/products").then((r) => setItems(r.data));
   const loadCategories = () => api.get("/categories").then((r) => setCategories(r.data));
@@ -231,6 +257,13 @@ function ProductsTab({ api }) {
     return (a.display_order || 999) - (b.display_order || 999);
   });
 
+  // Pagination — reset ke halaman 1 ketika filter berubah
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const paginated = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const pageIds = paginated.map((p) => p.id);
+  useEffect(() => { setPage(1); }, [filter]);
+
   const catNameMap = useMemo(() => {
     const m = {};
     categories.forEach((c) => { m[c.slug] = c.name; });
@@ -244,33 +277,50 @@ function ProductsTab({ api }) {
     load();
   };
 
-  const movePriority = async (id, direction) => {
-    // Bergerak dalam urutan hasil filter published-first
-    const sorted = [...items].sort((a, b) => {
-      const sA = a.publish_status === "draft" ? 1 : 0;
-      const sB = b.publish_status === "draft" ? 1 : 0;
-      if (sA !== sB) return sA - sB;
-      return (a.display_order || 999) - (b.display_order || 999);
-    });
-    const idx = sorted.findIndex((p) => p.id === id);
-    if (idx < 0) return;
-    const newIdx = idx + direction;
-    if (newIdx < 0 || newIdx >= sorted.length) return;
-    if (sorted[idx].publish_status !== sorted[newIdx].publish_status) {
+  const handleDragEnd = async (event) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+
+    // Cari posisi dalam SORTED filtered array (yang dirender)
+    const pageItems = paginated;
+    const oldIdx = pageItems.findIndex((p) => p.id === active.id);
+    const newIdx = pageItems.findIndex((p) => p.id === over.id);
+    if (oldIdx < 0 || newIdx < 0) return;
+
+    // Cegah cross-status (published ↔ draft) — jaga grup
+    if (pageItems[oldIdx].publish_status !== pageItems[newIdx].publish_status) {
       toast.error("Tidak bisa lintas grup Published/Draft");
       return;
     }
-    // Swap secara array-level lalu renumber SELURUH list. Ini kebal terhadap
-    // display_order yang collide/duplicate/missing.
-    const reordered = [...sorted];
-    [reordered[idx], reordered[newIdx]] = [reordered[newIdx], reordered[idx]];
-    const payload = reordered.map((p, i) => ({ id: p.id, display_order: (i + 1) * 10 }));
+
+    // Optimistic UI: reorder items lokal terlebih dahulu
+    const reordered = arrayMove(pageItems, oldIdx, newIdx);
+
+    // Bangun full sorted list dengan reordered page menggantikan posisi lama
+    const fullSorted = [...filtered];
+    const pageStart = (page - 1) * PAGE_SIZE;
+    for (let i = 0; i < reordered.length; i++) {
+      fullSorted[pageStart + i] = reordered[i];
+    }
+
+    // Merge kembali ke items dengan display_order baru untuk grup published saja
+    const publishedList = fullSorted.filter((p) => p.publish_status !== "draft");
+    const draftList = fullSorted.filter((p) => p.publish_status === "draft");
+    const newOrders = [];
+    publishedList.forEach((p, i) => newOrders.push({ id: p.id, display_order: (i + 1) * 10 }));
+    draftList.forEach((p, i) => newOrders.push({ id: p.id, display_order: (publishedList.length + i + 1) * 10 }));
+
+    // Snapshot untuk rollback
+    const snapshot = items;
+    const orderMap = Object.fromEntries(newOrders.map((o) => [o.id, o.display_order]));
+    setItems((prev) => prev.map((p) => (orderMap[p.id] != null ? { ...p, display_order: orderMap[p.id] } : p)));
+
     try {
-      await api.post("/admin/products/reorder", { orders: payload });
-      toast.success(direction < 0 ? "Naik satu posisi" : "Turun satu posisi");
-      load();
+      await api.post("/admin/products/reorder", { orders: newOrders });
+      toast.success("Urutan berhasil diperbarui ✓");
     } catch (e) {
-      toast.error("Gagal ubah urutan");
+      setItems(snapshot);
+      toast.error("Gagal simpan urutan, dikembalikan ke sebelumnya");
     }
   };
 
@@ -447,9 +497,12 @@ function ProductsTab({ api }) {
         )}
       </div>
 
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={pageIds} strategy={verticalListSortingStrategy}>
       <Table>
         <TableHeader>
           <TableRow className="border-white/10 hover:bg-transparent">
+            <TableHead className="text-white/60 w-6"></TableHead>
             <TableHead className="text-white/60 w-8">
               <input
                 type="checkbox"
@@ -467,113 +520,65 @@ function ProductsTab({ api }) {
           </TableRow>
         </TableHeader>
         <TableBody>
-          {filtered.map((p) => {
-            const has = p.discount_active && p.discount_price;
-            const incomplete = !p.photo_url || !p.original_price || p.original_price <= 0;
-            const isDraft = p.publish_status === "draft";
-            return (
-              <TableRow key={p.id} className="border-white/5" data-testid={`product-row-${p.id}`}>
-                <TableCell>
-                  <input
-                    type="checkbox"
-                    data-testid={`select-${p.id}`}
-                    checked={selectedIds.has(p.id)}
-                    onChange={() => toggleSelect(p.id)}
-                    className="accent-[#F5A623]"
-                  />
-                </TableCell>
-                <TableCell>
-                  <div className="flex items-center gap-3">
-                    {p.photo_url ? (
-                      <img src={resolveImageUrl(p.photo_url)} alt="" className="w-10 h-10 rounded-md object-cover" />
-                    ) : (
-                      <div className="w-10 h-10 rounded-md bg-white/5 border border-dashed border-white/15 flex items-center justify-center text-white/30">
-                        <ImageIcon size={14} />
-                      </div>
-                    )}
-                    <div>
-                      <div className="text-sm font-medium flex items-center gap-2 flex-wrap">
-                        {p.name}
-                        {incomplete && (
-                          <span
-                            data-testid={`incomplete-badge-${p.id}`}
-                            className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30"
-                          >
-                            Belum Lengkap
-                          </span>
-                        )}
-                        {p.is_bestseller && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-500/15 text-red-300 border border-red-500/30">
-                            🔥 Terlaris
-                          </span>
-                        )}
-                        {p.is_promo && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-500/15 text-blue-300 border border-blue-500/30">
-                            🏷️ Promo
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-xs text-white/40 line-clamp-1 max-w-xs">{p.description}</div>
-                    </div>
-                  </div>
-                </TableCell>
-                <TableCell className="text-xs text-white/70">
-                  {catNameMap[p.category] || p.category || "Lainnya"}
-                </TableCell>
-                <TableCell className="text-sm">
-                  {has && <div className="text-white/40 line-through text-xs">{formatIDR(p.original_price)}</div>}
-                  <div className="gold-text font-semibold">{formatIDR(has ? p.discount_price : p.original_price)}</div>
-                </TableCell>
-                <TableCell>
-                  <button
-                    data-testid={`toggle-status-${p.id}`}
-                    onClick={() => togglePublish(p)}
-                    className={`px-2.5 py-1 rounded-full text-[11px] border transition-colors ${
-                      isDraft
-                        ? "bg-purple-500/15 text-purple-300 border-purple-500/40 hover:bg-purple-500/25"
-                        : "bg-green-500/15 text-green-300 border-green-500/40 hover:bg-green-500/25"
-                    }`}
-                    title={isDraft ? "Klik untuk PUBLISH" : "Klik untuk UNPUBLISH (jadi Draft)"}
-                  >
-                    {isDraft ? <><EyeOff size={11} className="inline mr-0.5" /> DRAFT</> : <><Eye size={11} className="inline mr-0.5" /> PUBLISHED</>}
-                  </button>
-                </TableCell>
-                <TableCell className="text-right">
-                  <button
-                    data-testid={`move-up-${p.id}`}
-                    onClick={() => movePriority(p.id, -1)}
-                    className="p-1 rounded-md text-white/50 hover:bg-white/5 hover:text-[#F5A623]"
-                    title="Naikkan prioritas"
-                  >▲</button>
-                  <button
-                    data-testid={`move-down-${p.id}`}
-                    onClick={() => movePriority(p.id, +1)}
-                    className="p-1 rounded-md text-white/50 hover:bg-white/5 hover:text-[#F5A623]"
-                    title="Turunkan prioritas"
-                  >▼</button>
-                  <button
-                    data-testid={`edit-product-${p.id}`}
-                    onClick={() => { setEditing(p); setOpen(true); }}
-                    className="p-2 rounded-md text-white/70 hover:bg-white/5 hover:text-[#F5A623]"
-                  >
-                    <Edit size={15} />
-                  </button>
-                  <button
-                    data-testid={`delete-product-${p.id}`}
-                    onClick={() => remove(p.id)}
-                    className="p-2 rounded-md text-white/70 hover:bg-white/5 hover:text-red-400"
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                </TableCell>
-              </TableRow>
-            );
-          })}
-          {filtered.length === 0 && (
-            <TableRow><TableCell colSpan={6} className="text-center text-white/40 py-6">Belum ada produk</TableCell></TableRow>
-          )}
+          {paginated.map((p) => (
+            <SortableProductRow
+              key={p.id}
+              product={p}
+              catNameMap={catNameMap}
+              selectedIds={selectedIds}
+              onToggleSelect={toggleSelect}
+              onTogglePublish={togglePublish}
+              onEdit={(prod) => { setEditing(prod); setOpen(true); }}
+              onDelete={remove}
+            />
+          ))}
         </TableBody>
       </Table>
+        </SortableContext>
+      </DndContext>
+
+      {/* Pagination controls */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between mt-4 flex-wrap gap-2" data-testid="products-pagination">
+          <div className="text-xs text-white/50">
+            Menampilkan {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, filtered.length)} dari {filtered.length} produk
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              data-testid="page-prev-btn"
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              className="p-1.5 rounded-md text-white/70 hover:bg-white/5 disabled:opacity-30 disabled:cursor-not-allowed"
+              aria-label="Halaman sebelumnya"
+            >
+              <ChevronLeft size={16} />
+            </button>
+            {Array.from({ length: totalPages }, (_, i) => i + 1).map((n) => (
+              <button
+                key={n}
+                data-testid={`page-btn-${n}`}
+                onClick={() => setPage(n)}
+                className={`w-8 h-8 rounded-md text-xs font-semibold transition-colors ${
+                  n === currentPage
+                    ? "bg-[#F5A623] text-[#0f1117]"
+                    : "text-white/60 hover:bg-white/5"
+                }`}
+              >
+                {n}
+              </button>
+            ))}
+            <button
+              data-testid="page-next-btn"
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              className="p-1.5 rounded-md text-white/70 hover:bg-white/5 disabled:opacity-30 disabled:cursor-not-allowed"
+              aria-label="Halaman berikutnya"
+            >
+              <ChevronRight size={16} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {open && (
         <ProductFormDialog
@@ -606,6 +611,137 @@ function ProductsTab({ api }) {
     </div>
   );
 }
+
+// ---------- SortableProductRow (dnd-kit) ----------
+function SortableProductRow({ product: p, catNameMap, selectedIds, onToggleSelect, onTogglePublish, onEdit, onDelete }) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: p.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.5 : 1,
+    boxShadow: isDragging ? "0 12px 32px rgba(0,0,0,0.6)" : undefined,
+    background: isDragging ? "rgba(245, 166, 35, 0.05)" : undefined,
+    zIndex: isDragging ? 10 : "auto",
+    position: "relative",
+  };
+
+  const has = p.discount_active && p.discount_price;
+  const incomplete = !p.photo_url || !p.original_price || p.original_price <= 0;
+  const isDraft = p.publish_status === "draft";
+
+  return (
+    <TableRow
+      ref={setNodeRef}
+      style={style}
+      className="border-white/5 touch-none"
+      data-testid={`product-row-${p.id}`}
+    >
+      <TableCell className="w-6 p-1">
+        <button
+          type="button"
+          data-testid={`drag-handle-${p.id}`}
+          {...attributes}
+          {...listeners}
+          aria-label="Drag untuk ubah urutan"
+          className="p-1 rounded text-white/30 hover:text-[#F5A623] hover:bg-white/5 cursor-grab active:cursor-grabbing touch-none"
+        >
+          <GripVertical size={14} />
+        </button>
+      </TableCell>
+      <TableCell>
+        <input
+          type="checkbox"
+          data-testid={`select-${p.id}`}
+          checked={selectedIds.has(p.id)}
+          onChange={() => onToggleSelect(p.id)}
+          className="accent-[#F5A623]"
+        />
+      </TableCell>
+      <TableCell>
+        <div className="flex items-center gap-3">
+          {p.photo_url ? (
+            <img src={resolveImageUrl(p.photo_url)} alt="" className="w-10 h-10 rounded-md object-cover" style={{ objectPosition: p.image_position || "center center" }} />
+          ) : (
+            <div className="w-10 h-10 rounded-md bg-white/5 border border-dashed border-white/15 flex items-center justify-center text-white/30">
+              <ImageIcon size={14} />
+            </div>
+          )}
+          <div>
+            <div className="text-sm font-medium flex items-center gap-2 flex-wrap">
+              {p.name}
+              {incomplete && (
+                <span
+                  data-testid={`incomplete-badge-${p.id}`}
+                  className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-500/15 text-amber-300 border border-amber-500/30"
+                >
+                  Belum Lengkap
+                </span>
+              )}
+              {p.is_bestseller && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-500/15 text-red-300 border border-red-500/30">
+                  🔥 Terlaris
+                </span>
+              )}
+              {p.is_promo && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-500/15 text-blue-300 border border-blue-500/30">
+                  🏷️ Promo
+                </span>
+              )}
+            </div>
+            <div className="text-xs text-white/40 line-clamp-1 max-w-xs">{p.description}</div>
+          </div>
+        </div>
+      </TableCell>
+      <TableCell className="text-xs text-white/70">
+        {catNameMap[p.category] || p.category || "Lainnya"}
+      </TableCell>
+      <TableCell className="text-sm">
+        {has && <div className="text-white/40 line-through text-xs">{formatIDR(p.original_price)}</div>}
+        <div className="gold-text font-semibold">{formatIDR(has ? p.discount_price : p.original_price)}</div>
+      </TableCell>
+      <TableCell>
+        <button
+          data-testid={`toggle-status-${p.id}`}
+          onClick={() => onTogglePublish(p)}
+          className={`px-2.5 py-1 rounded-full text-[11px] border transition-colors ${
+            isDraft
+              ? "bg-purple-500/15 text-purple-300 border-purple-500/40 hover:bg-purple-500/25"
+              : "bg-green-500/15 text-green-300 border-green-500/40 hover:bg-green-500/25"
+          }`}
+          title={isDraft ? "Klik untuk PUBLISH" : "Klik untuk UNPUBLISH (jadi Draft)"}
+        >
+          {isDraft ? <><EyeOff size={11} className="inline mr-0.5" /> DRAFT</> : <><Eye size={11} className="inline mr-0.5" /> PUBLISHED</>}
+        </button>
+      </TableCell>
+      <TableCell className="text-right whitespace-nowrap">
+        <button
+          data-testid={`edit-product-${p.id}`}
+          onClick={() => onEdit(p)}
+          className="p-2 rounded-md text-white/70 hover:bg-white/5 hover:text-[#F5A623]"
+        >
+          <Edit size={15} />
+        </button>
+        <button
+          data-testid={`delete-product-${p.id}`}
+          onClick={() => onDelete(p.id)}
+          className="p-2 rounded-md text-white/70 hover:bg-white/5 hover:text-red-400"
+        >
+          <Trash2 size={15} />
+        </button>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+
 
 function ProductFormDialog({ open, onOpenChange, editing, categories, api, onSaved }) {
   const [form, setForm] = useState(() => editing ? {

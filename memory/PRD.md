@@ -138,6 +138,20 @@ Import GitHub repo `https://github.com/noctics77-beep/WebCreative` (branch: main
 ## Pending User Action (Iteration 11)
 - 🚀 User must **Save to GitHub + Redeploy** production to apply AI feature.
 
+
+### Iteration 12 (Jul 14, 2026) — Drag-and-Drop Reorder Produk
+- [x] Hapus tombol ▲▼ move-up/move-down. Ganti dengan drag-and-drop via `@dnd-kit/core` + `@dnd-kit/sortable` (support touch/mobile long-press 300ms + desktop pointer 8px activation).
+- [x] Icon drag handle (⋮⋮ GripVertical) di kolom paling kiri setiap baris — cursor grab, tidak konflik dengan klik edit/delete/toggle.
+- [x] Visual feedback saat drag: opacity 0.5 + shadow elevation + background gold tint.
+- [x] Setelah drop: optimistic UI update → `POST /admin/products/reorder` dengan renumber grup published & draft terpisah (kelipatan 10). Kalau gagal → rollback ke snapshot + error toast.
+- [x] Toast sukses: "Urutan berhasil diperbarui ✓". Toast gagal: "Gagal simpan urutan, dikembalikan ke sebelumnya".
+- [x] Cegah cross-status swap: kalau tarik produk Published ke area Draft (atau sebaliknya) → toast error + skip.
+- [x] Pagination client-side 20 per halaman dengan nav Prev/Next + numbered buttons. Drag hanya aktif di halaman yang ditampilkan (kebal untuk 100+ produk).
+- [x] Verified via curl + screenshot: drag TEST Import1 ke atas TEST Import3 → order=10 vs 20 persisted; toast tampil.
+
+## Pending User Action (Iteration 12)
+- 🚀 Save to Github + Redeploy production.
+
 - Split `/app/backend/server.py` (~1360 lines) into `routers/orders.py`, `routers/admin.py`, `routers/exports.py`, `routers/tracking.py`, `routers/loyalty.py`
 - Extract `_compute_customers()` helper to decouple from handler
 
