@@ -2681,6 +2681,114 @@ async def public_telegram_webhook(request: Request):
 # GENERATE INFO PRODUK (Gemini)
 # =============================================================================
 
+
+# ---------- AI Image Position Suggestion ----------
+_VALID_POSITIONS = {
+    "top left", "top center", "top right",
+    "center left", "center center", "center right",
+    "bottom left", "bottom center", "bottom right",
+}
+
+
+class AISuggestPositionPayload(BaseModel):
+    image_url: str  # bisa URL eksternal (http/https) atau path server (/api/uploads/xxx)
+
+
+@api_router.post("/admin/ai/suggest-image-position")
+async def admin_ai_suggest_position(
+    payload: AISuggestPositionPayload,
+    x_admin_password: Optional[str] = Header(None),
+):
+    """Gunakan Gemini Vision untuk menyarankan CSS object-position terbaik.
+
+    Return: {"position": "center center", "reason": "..."}.
+    """
+    await verify_admin(x_admin_password)
+    if not GEMINI_API_KEY:
+        raise HTTPException(400, "GEMINI_API_KEY belum dikonfigurasi")
+    url = (payload.image_url or "").strip()
+    if not url:
+        raise HTTPException(400, "image_url wajib diisi")
+
+    # Load image bytes: URL eksternal via httpx, atau path lokal langsung baca file
+    import base64
+    from pathlib import Path
+    img_bytes: bytes = b""
+    mime_type = "image/jpeg"
+    try:
+        if url.startswith("/api/uploads/") or url.startswith("/uploads/"):
+            rel = url.replace("/api/uploads/", "").replace("/uploads/", "").lstrip("/")
+            path = Path("/app/backend/uploads") / rel
+            if not path.exists() or not path.is_file():
+                raise HTTPException(404, "File upload tidak ditemukan")
+            img_bytes = path.read_bytes()
+            ext = path.suffix.lower()
+            mime_type = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp"}.get(ext.lstrip("."), "image/jpeg")
+        else:
+            import httpx
+            async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                r = await client.get(url)
+                if r.status_code != 200:
+                    raise HTTPException(400, f"Gagal fetch gambar (HTTP {r.status_code})")
+                img_bytes = r.content
+                mime_type = r.headers.get("content-type", "image/jpeg").split(";")[0].strip() or "image/jpeg"
+        if len(img_bytes) > 10 * 1024 * 1024:  # 10MB safety cap
+            raise HTTPException(400, "Ukuran gambar terlalu besar (>10MB)")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"AI position fetch error: {e}")
+        raise HTTPException(400, f"Gagal memuat gambar: {str(e)[:120]}")
+
+    prompt = (
+        "Analyze this product/banner image. Identify the main subject/focal point. "
+        "Based on the focal point location, suggest the best CSS object-position value "
+        "from these options ONLY: 'top left', 'top center', 'top right', 'center left', "
+        "'center center', 'center right', 'bottom left', 'bottom center', 'bottom right'. "
+        "Respond in strict JSON only, no markdown, no code fences: "
+        '{"position": "center center", "reason": "alasan singkat dalam Bahasa Indonesia (max 100 karakter)"}'
+    )
+
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel(model_name="gemini-2.5-flash")
+        resp = await model.generate_content_async([
+            {"mime_type": mime_type, "data": img_bytes},
+            prompt,
+        ])
+        raw = (getattr(resp, "text", None) or "").strip()
+    except Exception as e:
+        logger.error(f"Gemini vision error: {e}")
+        raise HTTPException(502, f"Gemini error: {str(e)[:200]}")
+
+    # Parse JSON (strip fences kalau ada)
+    import json as _json
+    cleaned = raw
+    if cleaned.startswith("```"):
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+    try:
+        data = _json.loads(cleaned)
+    except Exception:
+        # Try find first {...} block
+        m = re.search(r"\{[^{}]*\}", cleaned, re.DOTALL)
+        if m:
+            try:
+                data = _json.loads(m.group(0))
+            except Exception:
+                data = {}
+        else:
+            data = {}
+
+    pos = (data.get("position") or "").strip().lower()
+    if pos not in _VALID_POSITIONS:
+        pos = "center center"
+    reason = (data.get("reason") or "").strip()[:150] or "Posisi default berdasarkan analisa AI."
+    return {"position": pos, "reason": reason}
+
+
+
 @api_router.post("/admin/generate-info")
 async def admin_generate_info(x_admin_password: Optional[str] = Header(None)):
     await verify_admin(x_admin_password)

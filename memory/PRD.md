@@ -122,6 +122,22 @@ Import GitHub repo `https://github.com/noctics77-beep/WebCreative` (branch: main
 - 📊 Server-side tracking (Meta CAPI + GA4 Measurement Protocol) for manual order approvals — requires CAPI Access Token + GA4 API Secret
 
 ### P2 — Code quality
+
+### Iteration 11 (Jul 14, 2026) — AI Auto-Suggest Image Position
+- [x] New endpoint `POST /api/admin/ai/suggest-image-position` — accepts image_url (external HTTP or local /api/uploads/), fetches bytes, sends to Gemini 2.5 Flash Vision, returns `{position, reason}`. Validates position against 9-value whitelist; falls back to "center center" if AI returns invalid.
+- [x] `<ObjectPositionPicker>` upgraded:
+  - Added **[✨ Auto AI]** + **[⟲ Reset]** buttons under 9-grid
+  - Purple sparkle badge on AI-suggested cell + reason tooltip below
+  - Manual click on another cell auto-clears AI badge (no confirmation)
+  - Reset → sets to "center center" + clears AI state
+  - Loading spinner + disabled during Gemini call (~2-3s)
+  - Error handling: distinguishes "GEMINI_API_KEY belum dikonfigurasi" vs generic error
+- [x] Applied to both Product form & Banner form (existing integration via `<ObjectPositionPicker>` — no changes needed there).
+- [x] Verified via curl → Gemini responded with valid position + Indonesian reason. UI screenshot confirms buttons render correctly.
+
+## Pending User Action (Iteration 11)
+- 🚀 User must **Save to GitHub + Redeploy** production to apply AI feature.
+
 - Split `/app/backend/server.py` (~1360 lines) into `routers/orders.py`, `routers/admin.py`, `routers/exports.py`, `routers/tracking.py`, `routers/loyalty.py`
 - Extract `_compute_customers()` helper to decouple from handler
 
