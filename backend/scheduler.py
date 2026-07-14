@@ -7,12 +7,14 @@ send duplicates.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from pymongo.errors import DuplicateKeyError
 
 logger = logging.getLogger(__name__)
 
@@ -81,37 +83,33 @@ def init_scheduler(db, send_telegram_fn) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=WIB)
 
     async def _job():
-        # === IDEMPOTENCY LOCK ===
-        # Kunci per-hari di collection job_locks. Kalau lock sudah ada, skip.
+        # === ATOMIC IDEMPOTENCY LOCK ===
+        # Gunakan `_id` (auto unique index MongoDB) supaya DuplicateKeyError
+        # dijamin atomik. `$setOnInsert + upsert` bisa memiliki race pada
+        # collection tanpa unique index; ini menghindarinya sepenuhnya.
         today_wib = datetime.now(WIB).strftime("%Y-%m-%d")
         lock_id = f"daily_summary_{today_wib}"
         try:
-            r = await db.job_locks.update_one(
-                {"id": lock_id},
-                {"$setOnInsert": {
-                    "id": lock_id,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                }},
-                upsert=True,
-            )
-            if r.upserted_id is None:
-                logger.info(f"Daily summary already sent today ({today_wib}), skip duplicate")
-                return
+            await db.job_locks.insert_one({
+                "_id": lock_id,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "worker_pid": os.getpid(),
+            })
+        except DuplicateKeyError:
+            logger.info(f"Daily summary already sent today ({today_wib}) by another worker, skip")
+            return
         except Exception as e:
             logger.error(f"Failed to acquire daily summary lock: {e}")
             return
 
+        # === SEND (jangan pernah rollback lock — lebih baik miss 1 hari daripada dupe) ===
         try:
             text = await build_daily_summary(db)
             await send_telegram_fn(text)
-            logger.info(f"Daily Telegram summary sent for {today_wib}")
+            logger.info(f"Daily Telegram summary sent for {today_wib} (pid={os.getpid()})")
         except Exception as e:
+            # LOG ONLY — jangan rollback lock. Admin bisa trigger manual kalau perlu.
             logger.error(f"Daily summary send failed: {e}")
-            # Rollback lock kalau send gagal, biar bisa retry di next run
-            try:
-                await db.job_locks.delete_one({"id": lock_id})
-            except Exception:
-                pass
 
     scheduler.add_job(
         _job,

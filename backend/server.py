@@ -185,6 +185,7 @@ class Product(BaseModel):
     slug: str = ""  # slug untuk URL /produk/[slug]
     display_order: int = 999  # urutan tampil admin (kecil = atas)
     has_variants: bool = False  # jika True, gunakan tabel product_variants
+    image_position: str = "center center"  # CSS object-position (top left | center center | dst.)
     created_at: str = Field(default_factory=now_iso)
 
 
@@ -206,6 +207,7 @@ class ProductCreate(BaseModel):
     stock_quantity: int = 0
     display_order: int = 999
     has_variants: bool = False
+    image_position: str = "center center"
 
 
 # ---------- Product Variants ----------
@@ -1137,6 +1139,16 @@ async def admin_create_product(payload: ProductCreate, x_admin_password: Optiona
     data = payload.model_dump()
     data["photo_url"] = _normalize_photo_url(data.get("photo_url"))
     data["slug"] = await _generate_unique_slug(data["name"])
+    # Auto-assign display_order kalau default (999) supaya reorder tidak collide.
+    # Cari max display_order dari produk yang sudah punya urutan valid (< 999).
+    if int(data.get("display_order", 999)) >= 999:
+        last = await db.products.find_one(
+            {"display_order": {"$lt": 999}},
+            {"_id": 0, "display_order": 1},
+            sort=[("display_order", -1)],
+        )
+        last_order = int(last["display_order"]) if last else 0
+        data["display_order"] = last_order + 10  # sisa gap 10 untuk manual insert
     p = Product(**data)
     await db.products.insert_one(p.model_dump())
     return p.model_dump()
@@ -3136,6 +3148,7 @@ class Banner(BaseModel):
     # Countdown & coupon linkage
     linked_coupon_code: str = ""  # kupon yang akan otomatis di-apply saat CTA diklik
     expires_at: str = ""  # ISO datetime string; kalau kosong & ada linked_coupon → pakai coupon.valid_until
+    image_position: str = "center center"  # CSS object-position untuk banner image
     created_at: str = Field(default_factory=now_iso)
 
 
@@ -3149,6 +3162,7 @@ class BannerCreate(BaseModel):
     display_order: int = 100
     linked_coupon_code: str = ""
     expires_at: str = ""
+    image_position: str = "center center"
 
 
 @api_router.get("/banners")

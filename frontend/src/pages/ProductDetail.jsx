@@ -152,6 +152,7 @@ export default function ProductDetail() {
             src={resolveImageUrl(product.photo_url) || "https://images.unsplash.com/photo-1625838144804-300f3907c110?w=800"}
             alt={product.name}
             className={`w-full h-full object-cover ${isDraft ? "opacity-40" : ""}`}
+            style={{ objectPosition: product.image_position || "center center" }}
             onError={(e) => { e.currentTarget.src = "https://images.unsplash.com/photo-1625838144804-300f3907c110?w=800"; }}
           />
           {isDraft && <div className="absolute inset-0 bg-gradient-to-b from-black/60 to-black/70" />}

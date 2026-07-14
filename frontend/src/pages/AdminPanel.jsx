@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo, useRef } from "react";
 import { adminApi, formatIDR, downloadAdminFile, resolveImageUrl } from "@/lib/api";
 import { parseBulkImportText } from "@/lib/bulkImportParser";
+import ObjectPositionPicker from "@/components/ObjectPositionPicker";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -255,20 +256,18 @@ function ProductsTab({ api }) {
     if (idx < 0) return;
     const newIdx = idx + direction;
     if (newIdx < 0 || newIdx >= sorted.length) return;
-    // swap display_order — pastikan kalau salah satu draft dan lainnya published, tetap tidak lintas grup
     if (sorted[idx].publish_status !== sorted[newIdx].publish_status) {
       toast.error("Tidak bisa lintas grup Published/Draft");
       return;
     }
-    const orderA = sorted[idx].display_order || 999;
-    const orderB = sorted[newIdx].display_order || 999;
+    // Swap secara array-level lalu renumber SELURUH list. Ini kebal terhadap
+    // display_order yang collide/duplicate/missing.
+    const reordered = [...sorted];
+    [reordered[idx], reordered[newIdx]] = [reordered[newIdx], reordered[idx]];
+    const payload = reordered.map((p, i) => ({ id: p.id, display_order: (i + 1) * 10 }));
     try {
-      await api.post("/admin/products/reorder", {
-        orders: [
-          { id: sorted[idx].id, display_order: orderB },
-          { id: sorted[newIdx].id, display_order: orderA },
-        ],
-      });
+      await api.post("/admin/products/reorder", { orders: payload });
+      toast.success(direction < 0 ? "Naik satu posisi" : "Turun satu posisi");
       load();
     } catch (e) {
       toast.error("Gagal ubah urutan");
@@ -621,6 +620,7 @@ function ProductFormDialog({ open, onOpenChange, editing, categories, api, onSav
     stock_limit_enabled: !!editing.stock_limit_enabled,
     stock_quantity: editing.stock_quantity || 0,
     has_variants: !!editing.has_variants,
+    image_position: editing.image_position || "center center",
   } : {
     name: "",
     photo_url: "",
@@ -638,6 +638,7 @@ function ProductFormDialog({ open, onOpenChange, editing, categories, api, onSav
     stock_limit_enabled: false,
     stock_quantity: 0,
     has_variants: false,
+    image_position: "center center",
   });
   const [saving, setSaving] = useState(false);
   const [variants, setVariants] = useState([]);
@@ -723,6 +724,7 @@ function ProductFormDialog({ open, onOpenChange, editing, categories, api, onSav
       stock_limit_enabled: form.stock_limit_enabled,
       stock_quantity: parseInt(form.stock_quantity || 0, 10),
       has_variants: form.has_variants,
+      image_position: form.image_position || "center center",
     };
     try {
       let productId = editing?.id;
@@ -770,6 +772,16 @@ function ProductFormDialog({ open, onOpenChange, editing, categories, api, onSav
               api={api}
             />
           </Field>
+          {form.photo_url && (
+            <Field label="Posisi Gambar (crop focus)">
+              <ObjectPositionPicker
+                value={form.image_position}
+                onChange={(pos) => setForm({ ...form, image_position: pos })}
+                previewImage={form.photo_url.startsWith("/api/") ? (process.env.REACT_APP_BACKEND_URL + form.photo_url) : form.photo_url}
+                testIdPrefix="pf-image-pos"
+              />
+            </Field>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <Field label="Kategori">
               <Select value={form.category} onValueChange={(v) => setForm({ ...form, category: v })}>
@@ -4027,6 +4039,7 @@ function BannersTab({ api }) {
                   src={resolveImageUrl(b.image_url)}
                   alt={b.title || "Banner"}
                   className="w-full h-full object-cover"
+                  style={{ objectPosition: b.image_position || "center center" }}
                   onError={(e) => { e.currentTarget.style.display = "none"; }}
                 />
               ) : (
@@ -4094,6 +4107,7 @@ function BannerFormDialog({ open, onOpenChange, editing, api, onSaved }) {
     display_order: editing?.display_order || 100,
     linked_coupon_code: editing?.linked_coupon_code || "",
     expires_at: editing?.expires_at || "",
+    image_position: editing?.image_position || "center center",
   }));
   const [saving, setSaving] = useState(false);
   const [coupons, setCoupons] = useState([]);
@@ -4117,6 +4131,7 @@ function BannerFormDialog({ open, onOpenChange, editing, api, onSaved }) {
         display_order: parseInt(form.display_order || 100, 10),
         linked_coupon_code: (form.linked_coupon_code || "").toUpperCase(),
         expires_at: form.expires_at || "",
+        image_position: form.image_position || "center center",
       };
       if (editing) await api.put(`/admin/banners/${editing.id}`, payload);
       else await api.post("/admin/banners", payload);
@@ -4141,6 +4156,16 @@ function BannerFormDialog({ open, onOpenChange, editing, api, onSaved }) {
               api={api}
             />
           </Field>
+          {form.image_url && (
+            <Field label="Posisi Gambar (crop focus)">
+              <ObjectPositionPicker
+                value={form.image_position}
+                onChange={(pos) => setForm({ ...form, image_position: pos })}
+                previewImage={form.image_url.startsWith("/api/") ? (process.env.REACT_APP_BACKEND_URL + form.image_url) : form.image_url}
+                testIdPrefix="bf-image-pos"
+              />
+            </Field>
+          )}
           <Field label="Judul Banner">
             <Input data-testid="bf-title" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })}
               className="bg-[#0f1117] border-white/15" />

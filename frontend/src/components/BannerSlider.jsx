@@ -93,6 +93,7 @@ export default function BannerSlider() {
                 src={resolveImageUrl(b.image_url)}
                 alt={b.title || "Banner"}
                 className="w-full h-full object-cover"
+                style={{ objectPosition: b.image_position || "center center" }}
                 onError={(e) => {
                   e.currentTarget.style.display = "none";
                 }}

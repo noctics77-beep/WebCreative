@@ -53,6 +53,7 @@ export default function ProductCard({ product, onOrder, onWaitlist, query }) {
           src={resolveImageUrl(product.photo_url) || "https://images.unsplash.com/photo-1625838144804-300f3907c110?w=800"}
           alt={product.name}
           className={`w-full h-full object-cover transition-transform duration-300 group-hover:scale-105 ${isDraft ? "opacity-40" : ""}`}
+          style={{ objectPosition: product.image_position || "center center" }}
           onError={(e) => {
             e.currentTarget.src = "https://images.unsplash.com/photo-1625838144804-300f3907c110?w=800";
           }}

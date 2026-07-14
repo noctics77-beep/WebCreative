@@ -105,6 +105,17 @@ Import GitHub repo `https://github.com/noctics77-beep/WebCreative` (branch: main
 ## Pending User Action (Iteration 9)
 - 🚀 User must **Save to GitHub + Redeploy** production (`creativestore.my.id`) to apply Variants + Countdown features.
 
+### Iteration 10 (Jul 14, 2026) — 3 Bug Fixes
+- [x] **#1 Image Position Control** — new `image_position` field (default "center center") on Product + Banner. New `<ObjectPositionPicker>` component (3×3 grid selector + live preview). Applied via CSS `object-position` inline style in ProductCard, ProductDetail, BannerSlider, and admin BannersTab grid preview.
+- [x] **#2 Reorder Bug** — Root cause: new products all defaulted to `display_order=999`, causing swap to be a no-op. Fixed: auto-assign incremental `display_order = last_valid + 10` at product create (excluding stale 999 defaults). Frontend `movePriority` now renumbers the ENTIRE sorted list (`(idx + 1) * 10`) instead of pair-swap, so it's collision-proof.
+- [x] **#3 Scheduler Duplicate (Robust Fix)** — Root cause: gunicorn multi-worker + upsert on non-unique field could race. Fixed with **atomic `insert_one({_id: lock_id})`** — MongoDB's `_id` uniqueness invariant guarantees only 1 worker succeeds; others get `DuplicateKeyError` and skip. Removed rollback-on-send-failure (better to miss 1 day than dupe). Verified via 5-concurrent-workers simulation: only 1 acquires lock. ✅
+- [x] Testing self-verified via curl: reorder swap (B=10, A=20) confirmed persisted + reflected in `/api/products`. Screenshot verifies ObjectPositionPicker UI.
+
+## Pending User Action (Iteration 10)
+- 🚀 User must **Save to GitHub + Redeploy** production (`creativestore.my.id`) to apply all fixes.
+- ⚠️ Bug #3 fix is CRITICAL for production — the scheduler race can only be fixed by the redeploy.
+
+
 ## Pending / Backlog
 ### P1 — Awaiting user input
 - 🔑 Personal `GEMINI_API_KEY` (chat still falls back to "Asisten sedang offline")
