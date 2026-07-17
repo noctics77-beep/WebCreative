@@ -21,10 +21,10 @@ import {
   trackPurchase,
 } from "@/lib/tracking";
 
-const PAYMENT_OPTIONS = [
-  { value: "qris_otomatis", label: "QRIS Otomatis", icon: QrCode },
-  { value: "qris", label: "QRIS Manual" },
-  { value: "transfer", label: "Transfer Bank" },
+const ALL_PAYMENT_OPTIONS = [
+  { value: "qris_otomatis", label: "QRIS Otomatis", icon: QrCode, flag: "pay_qris_otomatis_enabled" },
+  { value: "qris", label: "QRIS Manual", flag: "pay_qris_manual_enabled" },
+  { value: "transfer", label: "Transfer Bank", flag: "pay_transfer_enabled" },
 ];
 
 export default function OrderModal({ open, onClose, product, variant, referral }) {
@@ -33,14 +33,16 @@ export default function OrderModal({ open, onClose, product, variant, referral }
     contact: "",
     payment_method: "qris_otomatis",
     discount_code: "",
+    quantity: 1,
   });
   const [loading, setLoading] = useState(false);
   const [orderCode, setOrderCode] = useState(null);
   const [discountInfo, setDiscountInfo] = useState(null);
   const [step, setStep] = useState("form"); // form | payment | success
-  const [paySettings, setPaySettings] = useState({ qris_url: "", bank_accounts: [] });
+  const [paySettings, setPaySettings] = useState({ qris_url: "", bank_accounts: [], pay_qris_otomatis_enabled: true, pay_qris_manual_enabled: true, pay_transfer_enabled: true, telegram_group_url: "" });
   const [autoData, setAutoData] = useState(null); // {qr_image, pakasir_total, pakasir_fee, expires_at}
   const [autoPaid, setAutoPaid] = useState(false);
+  const [digitalContent, setDigitalContent] = useState(null);
   const [expired, setExpired] = useState(false);
   const [remaining, setRemaining] = useState(0); // seconds
   const pollRef = useRef(null);
@@ -54,6 +56,10 @@ export default function OrderModal({ open, onClose, product, variant, referral }
           setPaySettings({
             qris_url: r.data.qris_url || "",
             bank_accounts: r.data.bank_accounts || [],
+            pay_qris_otomatis_enabled: r.data.pay_qris_otomatis_enabled !== false,
+            pay_qris_manual_enabled: r.data.pay_qris_manual_enabled !== false,
+            pay_transfer_enabled: r.data.pay_transfer_enabled !== false,
+            telegram_group_url: r.data.telegram_group_url || "",
           })
         )
         .catch(() => {});
@@ -119,6 +125,7 @@ export default function OrderModal({ open, onClose, product, variant, referral }
         const r = await api.get(`/orders/${orderCode}/status`);
         if (r.data.status === "paid") {
           setAutoPaid(true);
+          if (r.data.digital_content) setDigitalContent(r.data.digital_content);
           setStep("success");
           // Track Purchase when order is auto-confirmed paid via Pakasir webhook
           trackPurchase({
@@ -139,6 +146,14 @@ export default function OrderModal({ open, onClose, product, variant, referral }
     return () => clearInterval(pollRef.current);
   }, [step, form.payment_method, orderCode, autoPaid, expired]);
 
+  // Filter payment options by settings + kalau tinggal 1 auto-select (hooks must be above early return)
+  useEffect(() => {
+    const enabled = ALL_PAYMENT_OPTIONS.filter((o) => paySettings[o.flag] !== false);
+    if (enabled.length === 0) return;
+    setForm((f) => (enabled.find((o) => o.value === f.payment_method) ? f : { ...f, payment_method: enabled[0].value }));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paySettings.pay_qris_otomatis_enabled, paySettings.pay_qris_manual_enabled, paySettings.pay_transfer_enabled]);
+
   if (!product) return null;
   // Variant-aware pricing — if variant given, override product price
   const hasDiscount =
@@ -146,9 +161,18 @@ export default function OrderModal({ open, onClose, product, variant, referral }
   const variantBase = variant
     ? (variant.discount_price || variant.price || 0)
     : null;
-  const basePrice = variant
+  const unitPrice = variant
     ? variantBase
     : (hasDiscount ? product.discount_price : product.original_price);
+
+  // Bulk pricing tier
+  const tiers = (variant?.bulk_tiers && variant.bulk_tiers.length) ? variant.bulk_tiers : (product.bulk_tiers || []);
+  const qty = Math.max(1, parseInt(form.quantity || 1, 10));
+  const applicableTier = tiers.filter((t) => qty >= parseInt(t.min_qty || 0, 10)).sort((a, b) => (b.min_qty || 0) - (a.min_qty || 0))[0];
+  const effectiveUnitPrice = applicableTier ? parseFloat(applicableTier.price) : unitPrice;
+  const basePrice = Math.round(effectiveUnitPrice * qty);
+
+  const PAYMENT_OPTIONS = ALL_PAYMENT_OPTIONS.filter((o) => paySettings[o.flag] !== false);
   // Support 2 tipe: loyalty (percentage) atau coupon voucher (percentage/nominal)
   const finalPrice = discountInfo?.valid
     ? (discountInfo.discount_amount != null
@@ -220,6 +244,7 @@ export default function OrderModal({ open, onClose, product, variant, referral }
     referral_affiliate_code: referral || null,
     discount_code: discountInfo?.valid ? form.discount_code.trim().toUpperCase() : null,
     variant_id: variant?.id || null,
+    quantity: qty,
   });
 
   const submit = async (e) => {
@@ -406,7 +431,51 @@ export default function OrderModal({ open, onClose, product, variant, referral }
               </div>
 
               <div>
+                <Label className="text-xs uppercase tracking-widest text-white/60">Jumlah</Label>
+                <div className="flex items-center gap-2 mt-2" data-testid="quantity-picker">
+                  <button
+                    type="button"
+                    onClick={() => setForm((f) => ({ ...f, quantity: Math.max(1, (parseInt(f.quantity || 1, 10) - 1)) }))}
+                    disabled={qty <= 1}
+                    data-testid="qty-decrement"
+                    className="w-9 h-9 rounded-md bg-white/5 border border-white/10 hover:bg-white/10 text-white/80 font-bold disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    −
+                  </button>
+                  <Input
+                    type="number"
+                    min={1}
+                    data-testid="qty-input"
+                    value={form.quantity}
+                    onChange={(e) => setForm({ ...form, quantity: parseInt(e.target.value || 1, 10) })}
+                    className="w-16 text-center bg-[#0f1117] border-white/15"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setForm((f) => ({ ...f, quantity: (parseInt(f.quantity || 1, 10) + 1) }))}
+                    data-testid="qty-increment"
+                    className="w-9 h-9 rounded-md bg-white/5 border border-white/10 hover:bg-white/10 text-white/80 font-bold"
+                  >
+                    +
+                  </button>
+                  {applicableTier && (
+                    <span className="text-[10px] text-green-300 ml-1" data-testid="bulk-tier-applied">
+                      🎉 Tier grosir: Rp {parseInt(applicableTier.price).toLocaleString("id-ID")}/unit
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div>
                 <Label className="text-xs uppercase tracking-widest text-white/60">Metode Pembayaran</Label>
+                {PAYMENT_OPTIONS.length === 0 ? (
+                  <div
+                    data-testid="no-payment-methods"
+                    className="mt-2 p-3 rounded-lg border border-amber-500/40 bg-amber-500/10 text-amber-200 text-xs leading-relaxed"
+                  >
+                    Pembayaran sedang tidak tersedia. Hubungi admin untuk info lebih lanjut 🙏
+                  </div>
+                ) : (
                 <RadioGroup
                   value={form.payment_method}
                   onValueChange={(v) => setForm({ ...form, payment_method: v })}
@@ -439,6 +508,7 @@ export default function OrderModal({ open, onClose, product, variant, referral }
                     </label>
                   ))}
                 </RadioGroup>
+                )}
               </div>
 
               {referral && (
@@ -794,6 +864,35 @@ export default function OrderModal({ open, onClose, product, variant, referral }
               </button>
             </div>
 
+            {/* Digital content delivery */}
+            {digitalContent && (
+              <div
+                data-testid="digital-delivery-card"
+                className="mt-4 bg-green-500/10 border border-green-500/40 rounded-xl p-4 animate-in fade-in duration-500"
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-green-300 text-lg">🎁</span>
+                  <h4 className="font-display text-sm text-green-200 font-semibold">Produk Kamu Sudah Siap!</h4>
+                </div>
+                <pre
+                  data-testid="digital-content-block"
+                  className="bg-black/60 border border-white/10 rounded-md p-3 text-xs text-green-100 font-mono whitespace-pre-wrap break-all leading-relaxed"
+                >{digitalContent}</pre>
+                <button
+                  type="button"
+                  data-testid="copy-digital-btn"
+                  onClick={() => {
+                    navigator.clipboard.writeText(digitalContent);
+                    toast.success("Data disalin ✓ Simpan baik-baik ya!");
+                  }}
+                  className="mt-2 inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-green-500/20 hover:bg-green-500/30 border border-green-500/40 text-green-200 text-xs font-semibold"
+                >
+                  <Copy size={12} /> Salin Data
+                </button>
+                <p className="text-[10px] text-green-300/70 mt-1.5">🔒 Jaga kerahasiaan data ini ya, Sobat Creative!</p>
+              </div>
+            )}
+
             {/* Referral CTA */}
             <div
               data-testid="referral-cta-card"
@@ -815,6 +914,28 @@ export default function OrderModal({ open, onClose, product, variant, referral }
                 </div>
               </div>
             </div>
+
+            {/* Telegram Group CTA */}
+            {paySettings.telegram_group_url && (
+              <a
+                href={paySettings.telegram_group_url}
+                target="_blank"
+                rel="noreferrer"
+                data-testid="telegram-group-cta"
+                className="mt-3 flex items-start gap-2.5 bg-[#0088cc]/8 border border-[#0088cc]/30 hover:border-[#0088cc]/50 rounded-xl p-3 text-left transition-colors"
+              >
+                <div className="text-xl leading-none">💬</div>
+                <div className="flex-1 min-w-0">
+                  <div className="font-display text-sm text-white">Gabung Grup Telegram CreativeStore!</div>
+                  <p className="text-[11px] text-white/65 mt-0.5 leading-relaxed">
+                    Dapatkan info promo eksklusif, produk baru, dan update langsung di genggaman kamu 🚀
+                  </p>
+                  <span className="inline-flex items-center gap-1 mt-1 text-[11px] font-semibold text-[#3aa3ff]">
+                    Gabung Sekarang →
+                  </span>
+                </div>
+              </a>
+            )}
           </div>
         )}
       </DialogContent>

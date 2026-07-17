@@ -282,6 +282,36 @@ export default function ProductDetail() {
             </div>
           )}
 
+          {/* Bulk pricing table (dari variant kalau ada, atau product) */}
+          {!isDraft && (() => {
+            const tiers = (selectedVariant?.bulk_tiers && selectedVariant.bulk_tiers.length)
+              ? selectedVariant.bulk_tiers
+              : (product.bulk_tiers || []);
+            if (!tiers.length) return null;
+            const unit = hasVariants ? variantEffectivePrice : finalPrice;
+            const sorted = [...tiers].sort((a, b) => (a.min_qty || 0) - (b.min_qty || 0));
+            return (
+              <div className="mt-6 rounded-xl bg-[#F5A623]/8 border border-[#F5A623]/30 p-4" data-testid="bulk-pricing-table">
+                <h3 className="font-display text-sm text-[#F5A623] mb-2">💰 Harga Grosir</h3>
+                <div className="space-y-1">
+                  {sorted.map((t, i) => {
+                    const price = parseFloat(t.price);
+                    const savedPct = unit > 0 ? Math.round((1 - price / unit) * 100) : 0;
+                    return (
+                      <div key={i} className="flex items-center justify-between text-xs text-white/80">
+                        <span>Beli <b>{t.min_qty}+</b> unit</span>
+                        <span>
+                          <b className="gold-text">{formatIDR(price)}</b>/unit
+                          {savedPct > 0 && <span className="text-green-300 ml-1">(hemat {savedPct}%)</span>}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
+
           {/* CTA */}
           <div className="mt-6">
             {isDraft ? (

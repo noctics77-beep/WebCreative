@@ -144,6 +144,7 @@ export default function AdminPanel() {
           <TabsTrigger value="categories" data-testid="tab-categories">Kategori</TabsTrigger>
           <TabsTrigger value="waitlist" data-testid="tab-waitlist">Waitlist</TabsTrigger>
           <TabsTrigger value="reviews" data-testid="tab-reviews">Ulasan</TabsTrigger>
+          <TabsTrigger value="digital-stocks" data-testid="tab-digital-stocks">Stok Digital</TabsTrigger>
           <TabsTrigger value="faq" data-testid="tab-faq">FAQ</TabsTrigger>
           <TabsTrigger value="about" data-testid="tab-about">Tentang</TabsTrigger>
           <TabsTrigger value="coupons" data-testid="tab-coupons">Kupon</TabsTrigger>
@@ -172,6 +173,9 @@ export default function AdminPanel() {
         </TabsContent>
         <TabsContent value="reviews" className="mt-6">
           <ReviewsTab api={api} />
+        </TabsContent>
+        <TabsContent value="digital-stocks" className="mt-6">
+          <DigitalStocksTab api={api} />
         </TabsContent>
         <TabsContent value="faq" className="mt-6">
           <FAQTab api={api} />
@@ -757,6 +761,8 @@ function ProductFormDialog({ open, onOpenChange, editing, categories, api, onSav
     stock_quantity: editing.stock_quantity || 0,
     has_variants: !!editing.has_variants,
     image_position: editing.image_position || "center center",
+    auto_delivery_enabled: !!editing.auto_delivery_enabled,
+    bulk_tiers: editing.bulk_tiers || [],
   } : {
     name: "",
     photo_url: "",
@@ -775,6 +781,8 @@ function ProductFormDialog({ open, onOpenChange, editing, categories, api, onSav
     stock_quantity: 0,
     has_variants: false,
     image_position: "center center",
+    auto_delivery_enabled: false,
+    bulk_tiers: [],
   });
   const [saving, setSaving] = useState(false);
   const [variants, setVariants] = useState([]);
@@ -802,6 +810,8 @@ function ProductFormDialog({ open, onOpenChange, editing, categories, api, onSav
         is_best_value: false,
         display_order: prev.length,
         is_active: true,
+        auto_delivery_enabled: false,
+        bulk_tiers: [],
       },
     ]);
   };
@@ -861,6 +871,11 @@ function ProductFormDialog({ open, onOpenChange, editing, categories, api, onSav
       stock_quantity: parseInt(form.stock_quantity || 0, 10),
       has_variants: form.has_variants,
       image_position: form.image_position || "center center",
+      auto_delivery_enabled: !!form.auto_delivery_enabled,
+      bulk_tiers: (form.bulk_tiers || []).filter((t) => t.min_qty && t.price).map((t) => ({
+        min_qty: parseInt(t.min_qty, 10),
+        price: parseFloat(t.price),
+      })),
     };
     try {
       let productId = editing?.id;
@@ -880,6 +895,8 @@ function ProductFormDialog({ open, onOpenChange, editing, categories, api, onSav
           is_best_value: !!v.is_best_value,
           display_order: idx,
           is_active: !!v.is_active,
+          auto_delivery_enabled: !!v.auto_delivery_enabled,
+          bulk_tiers: v.bulk_tiers || [],
         }));
         await api.put(`/admin/products/${productId}/variants`, { variants: variantPayload });
       }
@@ -1058,6 +1075,16 @@ function ProductFormDialog({ open, onOpenChange, editing, categories, api, onSav
                         />
                         <span className="text-white/60">Aktif</span>
                       </label>
+                      <label className="flex items-center gap-1 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          data-testid={`variant-autodelivery-${idx}`}
+                          checked={!!v.auto_delivery_enabled}
+                          onChange={(e) => updateVariant(idx, { auto_delivery_enabled: e.target.checked })}
+                          className="accent-[#F5A623]"
+                        />
+                        <span className="text-[#F5A623]">📦 Auto Delivery</span>
+                      </label>
                     </div>
                   </div>
                 ))}
@@ -1073,8 +1100,41 @@ function ProductFormDialog({ open, onOpenChange, editing, categories, api, onSav
             )}
           </div>
           <Field label="Deskripsi Singkat">
-            <Textarea data-testid="pf-description" rows={3} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}
-              className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]" />
+            <div className="relative">
+              <Textarea
+                data-testid="pf-description"
+                rows={4}
+                value={form.description}
+                onChange={(e) => setForm({ ...form, description: e.target.value })}
+                className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623] pr-24"
+              />
+              <button
+                type="button"
+                data-testid="pf-ai-desc-btn"
+                onClick={async () => {
+                  if (!form.name.trim()) return toast.error("Isi nama produk dulu");
+                  try {
+                    toast.info("✨ Sedang generate…");
+                    const activeVariants = variants.filter((v) => v.is_active && v.name).map((v) => v.name);
+                    const res = await api.post("/admin/ai/generate-description", {
+                      name: form.name,
+                      category: form.category,
+                      variants: activeVariants,
+                    });
+                    setForm((f) => ({ ...f, description: res.data.description }));
+                    toast.success("Deskripsi ter-generate ✨");
+                  } catch (e) {
+                    const msg = e?.response?.data?.detail || "";
+                    if (msg.includes("GEMINI_API_KEY")) toast.error("API key belum dikonfigurasi");
+                    else toast.error("Gagal generate. Coba lagi ya");
+                  }
+                }}
+                className="absolute top-2 right-2 inline-flex items-center gap-1 px-2 py-1 rounded-md bg-[#F5A623]/15 hover:bg-[#F5A623]/25 border border-[#F5A623]/40 text-[#F5A623] text-[10px] font-semibold uppercase tracking-wider"
+              >
+                <Sparkles size={11} />
+                {form.description ? "Ulang" : "AI"}
+              </button>
+            </div>
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Komisi (%)">
@@ -1153,6 +1213,57 @@ function ProductFormDialog({ open, onOpenChange, editing, categories, api, onSav
               </div>
             )}
           </div>
+
+          {/* Auto Delivery + Bulk Pricing (produk tanpa variasi) */}
+          {!form.has_variants && (
+            <div className="rounded-md bg-[#0f1117] border border-white/10 p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label className="text-sm">📦 Auto Delivery</Label>
+                  <p className="text-[10px] text-white/50 mt-0.5">Tarik stok digital otomatis saat order confirmed.</p>
+                </div>
+                <Switch
+                  data-testid="pf-auto-delivery"
+                  checked={!!form.auto_delivery_enabled}
+                  onCheckedChange={(v) => setForm({ ...form, auto_delivery_enabled: v })}
+                  className="data-[state=checked]:bg-[#F5A623]"
+                />
+              </div>
+              <div className="pt-2 border-t border-white/5">
+                <Label className="text-sm">💰 Harga Grosir (Bulk Tier)</Label>
+                <div className="space-y-1 mt-2" data-testid="bulk-tiers-table">
+                  {(form.bulk_tiers || []).map((t, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <Input type="number" placeholder="Min Qty (e.g. 3)" value={t.min_qty}
+                        onChange={(e) => {
+                          const next = [...form.bulk_tiers];
+                          next[i] = { ...next[i], min_qty: e.target.value };
+                          setForm({ ...form, bulk_tiers: next });
+                        }}
+                        className="w-24 bg-[#1a1d27] border-white/15 h-8 text-xs" />
+                      <Input type="number" placeholder="Harga per unit" value={t.price}
+                        onChange={(e) => {
+                          const next = [...form.bulk_tiers];
+                          next[i] = { ...next[i], price: e.target.value };
+                          setForm({ ...form, bulk_tiers: next });
+                        }}
+                        className="flex-1 bg-[#1a1d27] border-white/15 h-8 text-xs" />
+                      <button type="button" onClick={() => setForm({ ...form, bulk_tiers: form.bulk_tiers.filter((_, j) => j !== i) })} className="p-1 text-red-300 hover:bg-red-500/10 rounded">
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ))}
+                  <button type="button"
+                    onClick={() => setForm({ ...form, bulk_tiers: [...(form.bulk_tiers || []), { min_qty: "", price: "" }] })}
+                    data-testid="pf-add-tier"
+                    className="w-full text-xs py-1.5 rounded-md border border-dashed border-white/15 text-white/60 hover:border-[#F5A623]/40 hover:text-[#F5A623]"
+                  >
+                    + Tambah Tier Harga
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           <DialogFooter>
             <Button type="submit" data-testid="pf-submit" disabled={saving} className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold">
               {saving ? <Loader2 className="animate-spin" size={15} /> : "Simpan"}
@@ -1916,6 +2027,10 @@ function SettingsTab({ api }) {
     trust_since_year: "2021",
     trust_process_time: "1x24 Jam",
     footer_start_year: "2021",
+    pay_qris_otomatis_enabled: true,
+    pay_qris_manual_enabled: true,
+    pay_transfer_enabled: true,
+    telegram_group_url: "",
   });
   const [namesText, setNamesText] = useState("");
   const [loading, setLoading] = useState(true);
@@ -2038,6 +2153,18 @@ function SettingsTab({ api }) {
           Diskon ini diterapkan ke kode baru yang di-generate setelah 7 hari streak. Kode lama tetap pakai % saat dibuat.
         </p>
 
+        <h3 className="font-display text-lg pt-2">Community</h3>
+        <Field label="Link Grup Telegram (opsional)">
+          <Input
+            data-testid="settings-telegram-group"
+            value={stats.telegram_group_url || ""}
+            onChange={(e) => setStats({ ...stats, telegram_group_url: e.target.value })}
+            placeholder="https://t.me/creativestore_id"
+            className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
+          />
+          <p className="text-[10px] text-white/45 mt-1">Kalau diisi, section &quot;Gabung Grup Telegram&quot; tampil di popup konfirmasi order.</p>
+        </Field>
+
         <h3 className="font-display text-lg pt-2">Live Activity Feed</h3>
         <div className="flex items-center justify-between px-3 py-2 rounded-md bg-[#0f1117] border border-white/10">
           <Label className="text-sm">Aktifkan pop-up notifikasi live</Label>
@@ -2098,6 +2225,42 @@ function SettingsTab({ api }) {
         </Field>
 
         <h3 className="font-display text-lg pt-4">Pengaturan Pembayaran</h3>
+
+        {/* Payment Method Toggles */}
+        <div className="rounded-lg bg-[#0f1117] border border-white/10 p-3 space-y-2" data-testid="payment-toggles">
+          <p className="text-[10px] uppercase tracking-widest text-white/50 mb-1">Aktifkan Metode Pembayaran</p>
+          <label className="flex items-center justify-between px-2 py-1.5 rounded hover:bg-white/5">
+            <span className="text-sm">QRIS Otomatis (Pakasir)</span>
+            <Switch
+              data-testid="toggle-qris-otomatis"
+              checked={stats.pay_qris_otomatis_enabled !== false}
+              onCheckedChange={(v) => {
+                if (!v && !window.confirm("Menonaktifkan QRIS Otomatis berarti pembayaran tidak akan otomatis terkonfirmasi. Pastikan ada metode lain yang aktif. Lanjut?")) return;
+                setStats({ ...stats, pay_qris_otomatis_enabled: v });
+              }}
+              className="data-[state=checked]:bg-[#F5A623]"
+            />
+          </label>
+          <label className="flex items-center justify-between px-2 py-1.5 rounded hover:bg-white/5">
+            <span className="text-sm">QRIS Manual</span>
+            <Switch
+              data-testid="toggle-qris-manual"
+              checked={stats.pay_qris_manual_enabled !== false}
+              onCheckedChange={(v) => setStats({ ...stats, pay_qris_manual_enabled: v })}
+              className="data-[state=checked]:bg-[#F5A623]"
+            />
+          </label>
+          <label className="flex items-center justify-between px-2 py-1.5 rounded hover:bg-white/5">
+            <span className="text-sm">Transfer Bank</span>
+            <Switch
+              data-testid="toggle-transfer"
+              checked={stats.pay_transfer_enabled !== false}
+              onCheckedChange={(v) => setStats({ ...stats, pay_transfer_enabled: v })}
+              className="data-[state=checked]:bg-[#F5A623]"
+            />
+          </label>
+        </div>
+
         <Field label="Gambar QRIS Manual">
           <PhotoPicker
             value={stats.qris_url || ""}
@@ -4500,3 +4663,199 @@ function MaintenanceTab({ api }) {
     </div>
   );
 }
+
+// ---------- Digital Stocks Tab ----------
+function DigitalStocksTab({ api }) {
+  const [summary, setSummary] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState(null);
+
+  const load = () => {
+    setLoading(true);
+    api.get("/admin/digital-stocks/products-summary")
+      .then((r) => setSummary(r.data || []))
+      .finally(() => setLoading(false));
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
+
+  return (
+    <div className="glass rounded-2xl p-6" data-testid="digital-stocks-tab">
+      <div className="mb-4">
+        <h3 className="font-display text-lg">Stok Digital & Auto Delivery</h3>
+        <p className="text-xs text-white/50 mt-0.5">
+          Kelola data digital (email|password, kode aktivasi, dll). Sistem otomatis ambil FIFO saat order confirmed.
+        </p>
+      </div>
+
+      {loading && <p className="text-white/40 text-sm">Memuat…</p>}
+      {!loading && summary.length === 0 && (
+        <p className="text-white/40 text-sm">Belum ada produk. Buat produk dulu di tab Produk.</p>
+      )}
+
+      <div className="space-y-2">
+        {summary.map((row) => (
+          <div
+            key={`${row.product_id}-${row.variant_id || "-"}`}
+            data-testid={`stock-row-${row.product_id}-${row.variant_id || "none"}`}
+            className={`rounded-lg border p-3 flex items-center justify-between gap-2 ${
+              row.auto_delivery_enabled ? "border-[#F5A623]/30 bg-[#F5A623]/5" : "border-white/10 bg-[#0f1117]"
+            }`}
+          >
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium text-white truncate">
+                {row.product_name}
+                {row.variant_name && <span className="text-[#F5A623]"> ({row.variant_name})</span>}
+              </div>
+              <div className="mt-1 flex items-center gap-3 text-xs">
+                <span className="text-green-300">Tersedia: <b>{row.available}</b></span>
+                <span className="text-white/50">Terpakai: {row.used}</span>
+                <span className="text-white/50">Total: {row.total}</span>
+                {!row.auto_delivery_enabled && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-white/50">
+                    Auto Delivery OFF
+                  </span>
+                )}
+              </div>
+            </div>
+            <button
+              type="button"
+              data-testid={`open-stock-${row.product_id}-${row.variant_id || "none"}`}
+              onClick={() => setSelected(row)}
+              className="text-xs px-3 py-1.5 rounded-md bg-white/5 hover:bg-white/10 border border-white/10 text-white/80 whitespace-nowrap"
+            >
+              Kelola →
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {selected && (
+        <DigitalStockManagerDialog
+          open={!!selected}
+          onOpenChange={(v) => { if (!v) { setSelected(null); load(); } }}
+          product={selected}
+          api={api}
+        />
+      )}
+    </div>
+  );
+}
+
+function DigitalStockManagerDialog({ open, onOpenChange, product, api }) {
+  const [items, setItems] = useState([]);
+  const [counts, setCounts] = useState({ available: 0, used: 0, total: 0 });
+  const [bulkText, setBulkText] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const load = () => {
+    const params = { product_id: product.product_id };
+    if (product.variant_id) params.variant_id = product.variant_id;
+    api.get("/admin/digital-stocks", { params }).then((r) => {
+      setItems(r.data.items || []);
+      setCounts(r.data.counts || { available: 0, used: 0, total: 0 });
+    });
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [product.product_id, product.variant_id]);
+
+  const addBulk = async () => {
+    if (!bulkText.trim()) return;
+    setSaving(true);
+    try {
+      await api.post("/admin/digital-stocks/bulk", {
+        product_id: product.product_id,
+        variant_id: product.variant_id || null,
+        content: bulkText,
+      });
+      toast.success("Stok ditambahkan ✓");
+      setBulkText("");
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Gagal");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const removeItem = async (id) => {
+    if (!window.confirm("Hapus item ini?")) return;
+    try {
+      await api.delete(`/admin/digital-stocks/${id}`);
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Gagal hapus");
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="bg-[#1a1d27] border-white/10 text-white sm:max-w-[600px] max-h-[85vh] overflow-y-auto" data-testid="digital-stock-dialog">
+        <DialogHeader>
+          <DialogTitle className="font-display">
+            {product.product_name}
+            {product.variant_name && <span className="text-[#F5A623]"> ({product.variant_name})</span>}
+          </DialogTitle>
+          <p className="text-xs text-white/50">
+            Tersedia <b className="text-green-300">{counts.available}</b> • Terpakai {counts.used} • Total {counts.total}
+          </p>
+        </DialogHeader>
+
+        <div className="space-y-3 mt-2">
+          <Field label="Tambah Stok (1 item per baris)">
+            <Textarea
+              rows={5}
+              data-testid="ds-bulk-input"
+              value={bulkText}
+              onChange={(e) => setBulkText(e.target.value)}
+              placeholder="email1@gmail.com|password123&#10;email2@gmail.com|password456&#10;kodeaktivasi123&#10;https://drive.google.com/xxx"
+              className="bg-[#0f1117] border-white/15 font-mono text-xs"
+            />
+          </Field>
+          <Button
+            onClick={addBulk}
+            disabled={saving || !bulkText.trim()}
+            data-testid="ds-add-bulk-btn"
+            className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold"
+          >
+            {saving ? <Loader2 className="animate-spin" size={14} /> : `+ Tambah ${bulkText.split('\n').filter(l => l.trim()).length} Item`}
+          </Button>
+
+          <div className="pt-3 border-t border-white/10">
+            <h4 className="text-xs uppercase tracking-widest text-white/50 mb-2">Daftar Stok</h4>
+            <div className="max-h-80 overflow-y-auto space-y-1">
+              {items.length === 0 && <p className="text-white/40 text-xs">Belum ada stok</p>}
+              {items.map((it) => (
+                <div
+                  key={it.id}
+                  data-testid={`ds-item-${it.id}`}
+                  className={`flex items-center gap-2 px-2 py-1.5 rounded ${
+                    it.used ? "bg-white/[0.02] text-white/40" : "bg-[#0f1117] text-white/85"
+                  }`}
+                >
+                  <span className="text-[10px] px-1 rounded font-mono flex-shrink-0">
+                    {it.used ? "🔒" : "🟢"}
+                  </span>
+                  <span className="flex-1 font-mono text-xs truncate" title={it.content}>
+                    {it.content}
+                  </span>
+                  {it.used && it.order_code && (
+                    <span className="text-[9px] text-white/40">→ {it.order_code}</span>
+                  )}
+                  {!it.used && (
+                    <button
+                      type="button"
+                      onClick={() => removeItem(it.id)}
+                      className="p-1 text-red-300 hover:bg-red-500/10 rounded"
+                    >
+                      <X size={11} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+

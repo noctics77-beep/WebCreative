@@ -158,6 +158,21 @@ Import GitHub repo `https://github.com/noctics77-beep/WebCreative` (branch: main
 ## Key API Endpoints
 ### Public
 - `GET /api/products`
+
+### Iteration 13 (Jul 17, 2026) — 7 Feature Mega-Batch
+- [x] **#1 Toggle Metode Pembayaran** — 3 flag di stats: `pay_qris_otomatis_enabled`, `pay_qris_manual_enabled`, `pay_transfer_enabled`. Admin panel Settings toggle switches (dengan konfirmasi warning saat matikan QRIS Otomatis). OrderModal filter opsi + auto-select kalau tinggal 1 + warning "Pembayaran sedang tidak tersedia" kalau semua OFF.
+- [x] **#2 Auto Delivery + Stok Digital** — Collection baru `digital_stocks` (FIFO). Model Product/Variant + field `auto_delivery_enabled` & `bulk_tiers`. Endpoints: `GET/POST/DELETE /admin/digital-stocks/*`, `products-summary`. Trigger di `_settle_paid_order` + `admin_update_order_status(confirmed)` → `_auto_deliver_if_enabled` yang: (a) tarik N item FIFO, (b) save `order.digital_content`, (c) kirim via Telegram public bot ke `telegram_chat_id`, (d) low-stock alert admin jika ≤3, (e) notif "Auto Delivery Gagal!" kalau stok habis. Admin Tab baru "Stok Digital" (`DigitalStocksTab`) dengan manager dialog untuk paste bulk & hapus per item.
+- [x] **#3 Multi-Quantity + Bulk Pricing Tier** — `OrderCreate.quantity` field + `_apply_bulk_price` helper (tier terbesar yang ≤qty). `bulk_tiers: [{min_qty, price}]` per variant/product. **Block form kalau qty > stok digital** (error 400). Frontend OrderModal quantity picker `[−][qty][+]` + auto-highlight tier. ProductDetail tampilkan tabel "💰 Harga Grosir" dengan persen hemat.
+- [x] **#4 Lacak Pesanan tampil Data Digital** — TrackOrder & OrderModal success step tampilkan section "🎁 Produk Kamu Sudah Siap!" dengan `<pre>` monospace + tombol Salin (hanya kalau status=confirmed).
+- [x] **#5 Ajakan Grup Telegram** — Settings field `telegram_group_url`. OrderModal success step: card `[💬 Gabung Grup Telegram]` tampil kalau URL diisi (bawah referral card).
+- [x] **#6 PWA** — `/public/manifest.json` (theme #F5A623 + icons 192/512 auto-generated dgn PIL — logo "CS" gold circle), `/public/sw.js` (Network First API, Cache First static, offline fallback), `/public/offline.html` (branded dark navy + gold). Registration di index.html. `<InstallBanner>` component: `beforeinstallprompt` capture → tampil setelah 30s browsing → tombol Install + Nanti saja (`localStorage` dismiss).
+- [x] **#7 AI Auto-Generate Deskripsi** — Endpoint `POST /admin/ai/generate-description` (Gemini 2.5 Flash + prompt CreativeStore brand tone Indonesian, 50-100 kata, 2-3 emoji, no harga). Tombol kecil ✨ Sparkle di pojok kanan atas textarea deskripsi di form produk.
+- [x] Verified via curl: digital-stocks summary works, AI description generates natural Indonesian copy (200+ chars), payment flags stored. Screenshot: storefront loads clean tanpa console error, service worker registered.
+
+## Pending User Action (Iteration 13)
+- 🚀 **Save to Github + Redeploy** ke production `creativestore.my.id`
+- ℹ️ Untuk fitur PWA, user perlu tes install dari browser Chrome/Edge di HP setelah redeploy
+
 - `POST /api/orders`, `GET /api/orders/{code}/status`
 - `POST /api/chat` (Gemini)
 - `GET /api/track-order?order_code=…|contact=…` (NEW — public)

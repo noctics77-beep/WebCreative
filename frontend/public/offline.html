@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Offline · CreativeStore</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      background: linear-gradient(180deg, #0a0c12 0%, #0f1117 50%, #0a0c12 100%);
+      color: #fff;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card { text-align: center; max-width: 420px; }
+    .icon {
+      width: 80px; height: 80px; margin: 0 auto 24px;
+      border-radius: 20px;
+      background: rgba(245, 166, 35, 0.1);
+      border: 1px solid rgba(245, 166, 35, 0.35);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 36px;
+    }
+    h1 { font-size: 28px; margin-bottom: 12px; }
+    h1 span { color: #F5A623; }
+    p { color: rgba(255,255,255,0.7); font-size: 14px; line-height: 1.6; margin-bottom: 24px; }
+    button {
+      background: #F5A623; color: #0f1117; border: none;
+      padding: 12px 32px; border-radius: 999px;
+      font-weight: 600; font-size: 14px; cursor: pointer;
+      transition: background 0.2s;
+    }
+    button:hover { background: #d98f1a; }
+    .footer { margin-top: 40px; font-size: 11px; color: rgba(255,255,255,0.3); }
+  </style>
+</head>
+<body>
+  <div class="card" data-testid="offline-screen">
+    <div class="icon">📡</div>
+    <h1>Kamu Sedang <span>Offline</span></h1>
+    <p>Cek koneksi internet kamu ya, Sobat Creative! 🙏<br>Setelah online, halaman akan bisa dimuat kembali.</p>
+    <button onclick="window.location.reload()">Coba Lagi</button>
+    <div class="footer">CreativeStore — Digital goods premium 💛</div>
+  </div>
+</body>
+</html>

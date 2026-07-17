@@ -203,6 +203,33 @@ export default function TrackOrder() {
                   Selesaikan pembayaran agar pesanan diproses.
                 </div>
               )}
+              {o.status === "confirmed" && o.digital_content && (
+                <div
+                  data-testid={`digital-content-${o.order_code}`}
+                  className="mt-3 bg-green-500/10 border border-green-500/40 rounded-xl p-3"
+                >
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <span className="text-green-300">🎁</span>
+                    <h4 className="font-display text-sm text-green-200 font-semibold">Data Produk Kamu</h4>
+                  </div>
+                  <pre className="bg-black/60 border border-white/10 rounded-md p-2.5 text-xs text-green-100 font-mono whitespace-pre-wrap break-all leading-relaxed">
+{o.digital_content}
+                  </pre>
+                  <div className="flex items-center justify-between mt-1.5">
+                    <p className="text-[10px] text-green-300/70">🔒 Jaga kerahasiaan data ini ya, Sobat Creative!</p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(o.digital_content);
+                        toast.success("Data disalin ✓");
+                      }}
+                      className="text-[11px] px-2 py-1 rounded bg-green-500/20 hover:bg-green-500/30 text-green-200 font-semibold"
+                    >
+                      📋 Salin
+                    </button>
+                  </div>
+                </div>
+              )}
               {o.status === "confirmed" && (
                 <div className="mt-3 flex justify-end">
                   <Button

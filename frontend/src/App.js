@@ -20,6 +20,7 @@ import NavBar from "@/components/NavBar";
 import Footer from "@/components/Footer";
 import ChatWidget from "@/components/ChatWidget";
 import WelcomePopup from "@/components/WelcomePopup";
+import InstallBanner from "@/components/InstallBanner";
 import MaintenanceGate from "@/components/MaintenanceGate";
 import { initTracking, trackPageView } from "@/lib/tracking";
 
@@ -56,6 +57,7 @@ export default function App() {
           <Footer />
           <ChatWidget />
           <WelcomePopup />
+          <InstallBanner />
         </MaintenanceGate>
       </BrowserRouter>
       <Toaster

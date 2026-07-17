@@ -186,6 +186,8 @@ class Product(BaseModel):
     display_order: int = 999  # urutan tampil admin (kecil = atas)
     has_variants: bool = False  # jika True, gunakan tabel product_variants
     image_position: str = "center center"  # CSS object-position (top left | center center | dst.)
+    auto_delivery_enabled: bool = False  # kalau True, tarik stok digital saat order confirmed
+    bulk_tiers: List[dict] = []  # [{min_qty: 3, price: 130000}, ...] — hanya dipakai kalau tidak ada variasi
     created_at: str = Field(default_factory=now_iso)
 
 
@@ -208,6 +210,8 @@ class ProductCreate(BaseModel):
     display_order: int = 999
     has_variants: bool = False
     image_position: str = "center center"
+    auto_delivery_enabled: bool = False
+    bulk_tiers: List[dict] = []
 
 
 # ---------- Product Variants ----------
@@ -222,11 +226,13 @@ class ProductVariant(BaseModel):
     is_best_value: bool = False
     display_order: int = 100
     is_active: bool = True
+    auto_delivery_enabled: bool = False
+    bulk_tiers: List[dict] = []
     created_at: str = Field(default_factory=now_iso)
 
 
 class ProductVariantCreate(BaseModel):
-    id: Optional[str] = None  # optional untuk update in-place
+    id: Optional[str] = None
     name: str
     price: float = 0.0
     discount_price: Optional[float] = None
@@ -234,6 +240,8 @@ class ProductVariantCreate(BaseModel):
     is_best_value: bool = False
     display_order: int = 100
     is_active: bool = True
+    auto_delivery_enabled: bool = False
+    bulk_tiers: List[dict] = []
 
 
 class Category(BaseModel):
@@ -367,6 +375,9 @@ class Order(BaseModel):
     commission_amount: float = 0.0
     variant_id: Optional[str] = None
     variant_name: Optional[str] = None
+    quantity: int = 1
+    digital_content: Optional[str] = None  # data digital yang dikirim (kalau auto delivery)
+    digital_delivered_at: Optional[str] = None
     created_at: str = Field(default_factory=now_iso)
     # Pakasir automated QRIS fields
     pakasir_amount: Optional[int] = None
@@ -387,6 +398,7 @@ class OrderCreate(BaseModel):
     referral_affiliate_code: Optional[str] = None
     discount_code: Optional[str] = None
     variant_id: Optional[str] = None
+    quantity: int = 1
 
 
 class Affiliate(BaseModel):
@@ -532,6 +544,12 @@ DEFAULT_STATS = {
     "trust_since_year": "2021",
     "trust_process_time": "1x24 Jam",
     "footer_start_year": "2021",
+    # Payment method toggles
+    "pay_qris_otomatis_enabled": True,
+    "pay_qris_manual_enabled": True,
+    "pay_transfer_enabled": True,
+    # Community
+    "telegram_group_url": "",
 }
 
 
@@ -559,6 +577,10 @@ class StatsUpdate(BaseModel):
     trust_since_year: str = "2021"
     trust_process_time: str = "1x24 Jam"
     footer_start_year: str = "2021"
+    pay_qris_otomatis_enabled: bool = True
+    pay_qris_manual_enabled: bool = True
+    pay_transfer_enabled: bool = True
+    telegram_group_url: str = ""
 
 
 @api_router.put("/admin/stats")
@@ -742,6 +764,28 @@ async def create_order(payload: OrderCreate):
                 float(default["discount_price"]) if default.get("discount_price") else float(default["price"])
             )
 
+    # Multi-quantity + bulk pricing tier (per variant, fallback per product)
+    qty = max(1, int(payload.quantity or 1))
+    tiers = []
+    if variant_doc and variant_doc.get("bulk_tiers"):
+        tiers = variant_doc["bulk_tiers"]
+    elif not variant_doc and product.get("bulk_tiers"):
+        tiers = product["bulk_tiers"]
+    if tiers:
+        price = _apply_bulk_price(price, tiers, qty)
+    # Total = per-unit price × qty
+    price = round(price * qty, 2)
+
+    # Check digital stock availability jika auto_delivery ON (block kalau qty > stok)
+    auto_target = variant_doc if variant_doc else product
+    if auto_target.get("auto_delivery_enabled"):
+        counts = await _count_digital_stock(product["id"], variant_doc["id"] if variant_doc else None)
+        if counts["available"] < qty:
+            raise HTTPException(
+                400,
+                f"Stok digital tidak mencukupi (tersedia: {counts['available']}, diminta: {qty}). Coba kurangi jumlah atau hubungi admin.",
+            )
+
     # Apply loyalty discount code (10% off)
     if payload.discount_code:
         code = payload.discount_code.strip().upper()
@@ -795,6 +839,7 @@ async def create_order(payload: OrderCreate):
         commission_amount=commission,
         variant_id=(variant_doc.get("id") if variant_doc else None),
         variant_name=variant_name,
+        quantity=qty,
     )
 
     qr_image = None
@@ -841,6 +886,84 @@ async def create_order(payload: OrderCreate):
     }
 
 
+async def _auto_deliver_if_enabled(order: dict) -> Optional[str]:
+    """Kalau produk/variant punya auto_delivery_enabled → tarik stok digital FIFO.
+
+    Return: string berisi content digital (join dengan newline), atau None kalau tidak ada delivery.
+    Update order.digital_content jika berhasil.
+    """
+    if not order or order.get("digital_content"):
+        return order.get("digital_content") if order else None
+    product_id = order.get("product_id")
+    variant_id = order.get("variant_id")
+    qty = int(order.get("quantity", 1) or 1)
+
+    # Cek toggle: kalau variant → cek variant.auto_delivery_enabled, else product.auto_delivery_enabled
+    if variant_id:
+        variant = await db.product_variants.find_one({"id": variant_id}, {"_id": 0})
+        if not variant or not variant.get("auto_delivery_enabled"):
+            return None
+    else:
+        prod = await db.products.find_one({"id": product_id}, {"_id": 0})
+        if not prod or not prod.get("auto_delivery_enabled"):
+            return None
+
+    contents = await _reserve_digital_stock(product_id, variant_id, qty, order.get("order_code", ""))
+    if not contents:
+        # Gagal: notify admin
+        try:
+            prod = await db.products.find_one({"id": product_id}, {"_id": 0}) or {}
+            v_name = ""
+            if variant_id:
+                v = await db.product_variants.find_one({"id": variant_id}, {"_id": 0}) or {}
+                v_name = v.get("name", "")
+            label = f"{prod.get('name', '?')}" + (f" ({v_name})" if v_name else "")
+            await send_telegram(
+                f"<b>⚠️ Auto Delivery Gagal!</b>\n\n"
+                f"<b>Order:</b> {order.get('order_code')}\n"
+                f"<b>Produk:</b> {label}\n"
+                f"<b>Qty:</b> {qty}\n\n"
+                f"Stok digital habis — kirim manual ke pembeli!"
+            )
+        except Exception as e:
+            logger.error(f"Auto delivery fail notify error: {e}")
+        return None
+
+    delivered = "\n".join(contents)
+    now = now_iso()
+    await db.orders.update_one(
+        {"order_code": order.get("order_code")},
+        {"$set": {"digital_content": delivered, "digital_delivered_at": now}},
+    )
+
+    # Cek low stock threshold
+    try:
+        await _check_and_notify_low_digital_stock(product_id, variant_id)
+    except Exception as e:
+        logger.error(f"Low digital stock check failed: {e}")
+
+    # Notify pembeli via Telegram jika ada telegram_chat_id
+    try:
+        chat_id = order.get("telegram_chat_id")
+        if chat_id and TELEGRAM_PUBLIC_BOT_TOKEN:
+            label = order.get("product_name", "?")
+            if order.get("variant_name"):
+                label += f" ({order['variant_name']})"
+            msg = (
+                f"<b>✅ Pesanan Dikonfirmasi!</b>\n\n"
+                f"🎁 Produk: <b>{label}</b>\n"
+                f"📦 Data produk kamu:\n\n"
+                f"<pre>{delivered}</pre>\n\n"
+                f"🔒 Jangan share data ini ke orang lain ya, Sobat Creative! 💛\n\n"
+                f"— Tim CreativeStore\n{PUBLIC_STORE_URL}"
+            )
+            await send_public_telegram(chat_id, msg)
+    except Exception as e:
+        logger.error(f"Public telegram deliver failed: {e}")
+
+    return delivered
+
+
 async def _settle_paid_order(order_code: str) -> bool:
     """Idempotently mark a Pakasir order as paid + pay commission + notify. Returns True if newly settled."""
     res = await db.orders.update_one(
@@ -884,6 +1007,11 @@ async def _settle_paid_order(order_code: str) -> bool:
         f"<b>Total:</b> Rp {int(order.get('pakasir_total') or order['product_price']):,}\n"
         f"<b>Referral:</b> {order.get('referral_affiliate_code') or '-'}"
     )
+    # Auto delivery (kalau product/variant enabled)
+    try:
+        await _auto_deliver_if_enabled(order)
+    except Exception as e:
+        logger.error(f"Auto delivery error: {e}")
     return True
 
 
@@ -894,7 +1022,11 @@ async def order_status(order_code: str):
         raise HTTPException(404, "Order tidak ditemukan")
 
     if order["status"] == "confirmed":
-        return {"status": "paid"}
+        return {
+            "status": "paid",
+            "digital_content": order.get("digital_content"),
+            "digital_delivered_at": order.get("digital_delivered_at"),
+        }
     if order.get("pakasir_status") == "expired" or order["status"] == "expired":
         return {"status": "expired"}
 
@@ -1131,6 +1263,78 @@ async def _check_and_notify_low_stock(product_id: str) -> None:
             {"id": product_id},
             {"$set": {"low_stock_alerted_at": now_iso()}},
         )
+
+
+# ---------- Digital Stock helpers ----------
+def _apply_bulk_price(base_price: float, bulk_tiers: List[dict], qty: int) -> float:
+    """Pilih tier terbaik (min_qty terbesar yang <= qty), fallback base_price."""
+    if not bulk_tiers or qty <= 0:
+        return base_price
+    try:
+        applicable = [t for t in bulk_tiers if isinstance(t, dict) and int(t.get("min_qty", 0)) <= qty]
+        if not applicable:
+            return base_price
+        best = max(applicable, key=lambda t: int(t.get("min_qty", 0)))
+        return float(best.get("price", base_price))
+    except Exception:
+        return base_price
+
+
+async def _count_digital_stock(product_id: str, variant_id: Optional[str]) -> Dict[str, int]:
+    """Return {available, used, total} untuk produk/variant tertentu."""
+    q_all = {"product_id": product_id}
+    if variant_id:
+        q_all["variant_id"] = variant_id
+    else:
+        q_all["variant_id"] = {"$in": [None, ""]}
+    total = await db.digital_stocks.count_documents(q_all)
+    used = await db.digital_stocks.count_documents({**q_all, "used": True})
+    return {"available": total - used, "used": used, "total": total}
+
+
+async def _reserve_digital_stock(product_id: str, variant_id: Optional[str], qty: int, order_code: str) -> List[str]:
+    """Ambil `qty` item stok digital FIFO, mark as used, return list content."""
+    q = {"product_id": product_id, "used": {"$ne": True}}
+    if variant_id:
+        q["variant_id"] = variant_id
+    else:
+        q["variant_id"] = {"$in": [None, ""]}
+    docs = await db.digital_stocks.find(q, {"_id": 0}).sort("created_at", 1).limit(int(qty)).to_list(int(qty))
+    if not docs:
+        return []
+    ids = [d["id"] for d in docs]
+    await db.digital_stocks.update_many(
+        {"id": {"$in": ids}},
+        {"$set": {"used": True, "order_code": order_code, "used_at": now_iso()}},
+    )
+    return [d.get("content", "") for d in docs]
+
+
+async def _check_and_notify_low_digital_stock(product_id: str, variant_id: Optional[str]) -> None:
+    counts = await _count_digital_stock(product_id, variant_id)
+    if counts["available"] > 3:
+        return
+    prod = await db.products.find_one({"id": product_id}, {"_id": 0}) or {}
+    variant_name = ""
+    if variant_id:
+        v = await db.product_variants.find_one({"id": variant_id}, {"_id": 0}) or {}
+        variant_name = v.get("name", "")
+    admin_url = f"{PUBLIC_STORE_URL.rstrip('/')}/admin"
+    label = f"{prod.get('name', '?')}" + (f" ({variant_name})" if variant_name else "")
+    if counts["available"] == 0:
+        title = "🚨 Stok Digital HABIS!"
+        detail = f"Produk: <b>{label}</b>\nStok habis — order berikutnya akan gagal auto-delivery!"
+    else:
+        title = "⚠️ Stok Digital Menipis!"
+        detail = f"Produk: <b>{label}</b>\nSisa: <b>{counts['available']} item</b> — segera tambah stok!"
+    try:
+        await send_telegram(
+            f"<b>{title}</b>\n\n{detail}\n\n<a href=\"{admin_url}\">Buka Admin Panel →</a>"
+        )
+    except Exception as e:
+        logger.error(f"Low digital stock notify failed: {e}")
+
+
 
 
 @api_router.post("/admin/products")
@@ -1483,9 +1687,102 @@ async def admin_bulk_publish(
 async def admin_delete_product(product_id: str, x_admin_password: Optional[str] = Header(None)):
     await verify_admin(x_admin_password)
     r = await db.products.delete_one({"id": product_id})
-    # Cascade delete variants
+    # Cascade delete variants + digital stocks
     await db.product_variants.delete_many({"product_id": product_id})
+    await db.digital_stocks.delete_many({"product_id": product_id})
     return {"deleted": r.deleted_count}
+
+
+# ---------- Admin: Digital Stocks (Auto Delivery pool) ----------
+class DigitalStockBulk(BaseModel):
+    product_id: str
+    variant_id: Optional[str] = None
+    content: str  # multi-line string, 1 item per baris
+
+
+@api_router.get("/admin/digital-stocks")
+async def admin_list_digital_stocks(
+    product_id: str = Query(...),
+    variant_id: Optional[str] = Query(None),
+    x_admin_password: Optional[str] = Header(None),
+):
+    await verify_admin(x_admin_password)
+    q = {"product_id": product_id}
+    if variant_id:
+        q["variant_id"] = variant_id
+    else:
+        q["variant_id"] = {"$in": [None, ""]}
+    rows = await db.digital_stocks.find(q, {"_id": 0}).sort("created_at", 1).to_list(2000)
+    counts = await _count_digital_stock(product_id, variant_id)
+    return {"items": rows, "counts": counts}
+
+
+@api_router.post("/admin/digital-stocks/bulk")
+async def admin_add_digital_stocks(payload: DigitalStockBulk, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    lines = [ln.strip() for ln in (payload.content or "").splitlines() if ln.strip()]
+    if not lines:
+        raise HTTPException(400, "Tidak ada item valid")
+    docs = []
+    for ln in lines:
+        docs.append({
+            "id": str(uuid.uuid4()),
+            "product_id": payload.product_id,
+            "variant_id": payload.variant_id or None,
+            "content": ln,
+            "used": False,
+            "order_code": None,
+            "used_at": None,
+            "created_at": now_iso(),
+        })
+    await db.digital_stocks.insert_many(docs)
+    counts = await _count_digital_stock(payload.product_id, payload.variant_id)
+    return {"added": len(docs), "counts": counts}
+
+
+@api_router.delete("/admin/digital-stocks/{stock_id}")
+async def admin_delete_digital_stock(stock_id: str, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    r = await db.digital_stocks.delete_one({"id": stock_id, "used": {"$ne": True}})
+    if r.deleted_count == 0:
+        raise HTTPException(400, "Item sudah terpakai atau tidak ditemukan (item yang sudah dikirim ke pembeli tidak boleh dihapus)")
+    return {"deleted": 1}
+
+
+@api_router.get("/admin/digital-stocks/products-summary")
+async def admin_digital_stocks_summary(x_admin_password: Optional[str] = Header(None)):
+    """List semua produk/variant yang punya auto_delivery_enabled beserta counts stok."""
+    await verify_admin(x_admin_password)
+    products = await db.products.find({}, {"_id": 0}).to_list(500)
+    variants = await db.product_variants.find({}, {"_id": 0}).to_list(2000)
+    summary = []
+    for p in products:
+        if p.get("has_variants"):
+            for v in variants:
+                if v["product_id"] != p["id"]:
+                    continue
+                if v.get("auto_delivery_enabled") or True:
+                    # Sertakan variant apapun (admin bisa toggle nanti); tapi tandai enabled state
+                    c = await _count_digital_stock(p["id"], v["id"])
+                    summary.append({
+                        "product_id": p["id"],
+                        "product_name": p["name"],
+                        "variant_id": v["id"],
+                        "variant_name": v["name"],
+                        "auto_delivery_enabled": bool(v.get("auto_delivery_enabled")),
+                        **c,
+                    })
+        else:
+            c = await _count_digital_stock(p["id"], None)
+            summary.append({
+                "product_id": p["id"],
+                "product_name": p["name"],
+                "variant_id": None,
+                "variant_name": None,
+                "auto_delivery_enabled": bool(p.get("auto_delivery_enabled")),
+                **c,
+            })
+    return summary
 
 
 # ---------- Admin: Product Variants ----------
@@ -1636,6 +1933,14 @@ async def admin_update_order_status(order_id: str, payload: StatusUpdate, x_admi
                     }
                 },
             )
+
+        # Auto-delivery kalau product/variant enabled
+        try:
+            fresh = await db.orders.find_one({"id": order_id}, {"_id": 0})
+            if fresh:
+                await _auto_deliver_if_enabled(fresh)
+        except Exception as e:
+            logger.error(f"Auto delivery (manual confirm) error: {e}")
 
     return {"ok": True}
 
@@ -2374,12 +2679,17 @@ def _public_order_view(o: dict) -> dict:
         "order_code": o.get("order_code"),
         "buyer_name": o.get("buyer_name"),
         "product_name": o.get("product_name"),
+        "variant_name": o.get("variant_name"),
+        "quantity": o.get("quantity", 1),
         "product_price": o.get("pakasir_total") or o.get("product_price"),
         "status": o.get("status"),
         "payment_method": o.get("payment_method"),
         "created_at": o.get("created_at"),
         "paid_at": o.get("paid_at"),
         "expires_at": o.get("expires_at"),
+        # Digital content — hanya tersedia kalau order sudah confirmed
+        "digital_content": o.get("digital_content") if o.get("status") == "confirmed" else None,
+        "digital_delivered_at": o.get("digital_delivered_at"),
     }
 
 
@@ -2786,6 +3096,60 @@ async def admin_ai_suggest_position(
         pos = "center center"
     reason = (data.get("reason") or "").strip()[:150] or "Posisi default berdasarkan analisa AI."
     return {"position": pos, "reason": reason}
+
+
+
+
+class AIDescriptionPayload(BaseModel):
+    name: str
+    category: Optional[str] = ""
+    variants: List[str] = []
+
+
+@api_router.post("/admin/ai/generate-description")
+async def admin_ai_generate_description(
+    payload: AIDescriptionPayload,
+    x_admin_password: Optional[str] = Header(None),
+):
+    """Generate product description with Gemini 2.5 Flash — CreativeStore tone/brand."""
+    await verify_admin(x_admin_password)
+    if not GEMINI_API_KEY:
+        raise HTTPException(400, "GEMINI_API_KEY belum dikonfigurasi")
+    if not payload.name.strip():
+        raise HTTPException(400, "Nama produk wajib diisi")
+
+    variants_str = ", ".join(payload.variants) if payload.variants else "tidak ada"
+    prompt = (
+        "Kamu adalah copywriter untuk toko digital premium 'CreativeStore' yang menjual "
+        "subscription dan akun digital.\n\n"
+        f"Buat deskripsi produk yang menarik untuk:\n"
+        f"Nama: {payload.name.strip()}\n"
+        f"Kategori: {payload.category or 'lainnya'}\n"
+        f"Variasi: {variants_str}\n\n"
+        "Ketentuan:\n"
+        "- 50-100 kata\n"
+        "- Bahasa Indonesia yang friendly dan menarik\n"
+        "- Highlight manfaat utama produk\n"
+        "- Sertakan 2-3 emoji yang relevan\n"
+        "- Akhiri dengan kalimat yang mendorong pembeli untuk segera order\n"
+        "- Jangan sebut harga\n"
+        "- Tone: seperti teman yang rekomendasikan produk bagus ke Sobat Creative\n\n"
+        "Respon plain text, tanpa markdown, tanpa quote, langsung deskripsi saja."
+    )
+    try:
+        import google.generativeai as genai
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel(model_name="gemini-2.5-flash")
+        resp = await model.generate_content_async(prompt)
+        text = (getattr(resp, "text", None) or "").strip()
+        if not text:
+            raise HTTPException(502, "Gemini mengembalikan hasil kosong")
+        return {"description": text}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Gemini description error: {e}")
+        raise HTTPException(502, f"Gemini error: {str(e)[:200]}")
 
 
 
