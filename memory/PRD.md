@@ -192,3 +192,34 @@ Import GitHub repo `https://github.com/noctics77-beep/WebCreative` (branch: main
 ## Environment Variables
 - Backend: `MONGO_URL`, `DB_NAME`, `ADMIN_PASSWORD`, `GEMINI_API_KEY`, `PAKASIR_API_KEY`, `PAKASIR_PROJECT_SLUG`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `ADMIN_WHATSAPP`
 - Frontend: `REACT_APP_BACKEND_URL`, `REACT_APP_META_PIXEL_ID`, `REACT_APP_GA_MEASUREMENT_ID`
+
+
+## Iteration 14 (Feb 2026) — Inline Reorder + Testimonial System
+
+### Inline Product Reorder (Admin > Produk)
+- Number input in "Urutan" column beside drag handle → type position number + Enter to renumber the group.
+- Hover-only quick actions: "↑ Top" (Set ke Teratas) and "↓ End" (Set ke Terbawah) per row.
+- Coexists with existing @dnd-kit drag-and-drop.
+- Backend: `POST /api/admin/products/set-position { product_id, position }`, `POST /api/admin/products/move-to-edge { product_id, edge: 'top'|'bottom' }`.
+- Renumbering keeps published group before draft group in `display_order`.
+
+### Testimonial System
+- Public page `/testimoni` — masonry grid (columns-1 sm:columns-2 lg:columns-3), stats badges (Satisfied count, Avg Rating, Total approved), submission modal.
+- Submission: name (min 2), WA (optional for Verified Buyer check), product select, rating 1-5 stars, content (min 10), up to 3 photos (3MB each). Public upload endpoint `POST /api/testimonials/upload`.
+- All public submissions → `status='pending'`. Admin must approve before public visibility.
+- Verified Buyer auto-detected if WA matches a paid/confirmed order.
+- Admin can Pin testimonials — pinned show first everywhere.
+- Admin Panel > Testimoni tab with 5 sub-tabs: Menunggu Review (pending), Ditampilkan (approved), Disembunyikan (hidden), Posting Admin (admin-authored, auto-approved, up to 5 photos, badge toggles Verified Buyer / Admin Post), Settings (form_enabled toggle, satisfied_customers_text, claim_text, public_page_headline, public_page_subheadline).
+- Telegram notif to admin bot when a public testimonial is submitted.
+- Storefront: `TestimonialCarousel` fetches `/api/testimonials?limit=6` — falls back to static if empty.
+- ProductDetail: `ProductTestimonials` fetches `/api/testimonials?product_id=X` with rating summary (count + avg).
+- NavBar + Footer link to `/testimoni`.
+
+### New API Endpoints
+Public: `GET/POST /api/testimonials`, `GET /api/testimonials/settings`, `POST /api/testimonials/upload`.
+Admin (X-Admin-Password): `GET/POST /api/admin/testimonials`, `GET /api/admin/testimonials/counts`, `PUT /api/admin/testimonials/settings`, `PUT/DELETE /api/admin/testimonials/{id}`, `PATCH /api/admin/testimonials/{id}/status`, `PATCH /api/admin/testimonials/{id}/pin`, `POST /api/admin/products/set-position`, `POST /api/admin/products/move-to-edge`.
+
+### Backlog / Upcoming
+- P1: Resend Email integration for Waitlist notifications (blocked pending RESEND_API_KEY from user).
+- P2: Refactor `AdminPanel.jsx` (~4700 lines) → split tabs into `components/admin/` folder (start done with `TestimonialsTab.jsx`).
+- P2: Split `backend/server.py` (4288 lines) into route modules (products, orders, testimonials, payments).

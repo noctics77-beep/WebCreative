@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 
 export default function Testimonials() {
   const [items, setItems] = useState([]);
@@ -238,7 +238,9 @@ function SubmitTestimonialModal({ open, onOpenChange, products, onSubmitted }) {
       <DialogContent className="bg-[#1a1d27] border-white/10 max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Kirim Testimoni Kamu</DialogTitle>
-          <p className="text-xs text-white/50 mt-1">Testimoni akan diperiksa admin dulu (biasanya &lt;24 jam) sebelum tampil.</p>
+          <DialogDescription className="text-xs text-white/50 mt-1">
+            Testimoni akan diperiksa admin dulu (biasanya &lt;24 jam) sebelum tampil.
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-3 mt-3">
           <div>
