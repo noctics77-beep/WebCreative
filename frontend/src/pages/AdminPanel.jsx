@@ -19,6 +19,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { adminApi, formatIDR, downloadAdminFile, resolveImageUrl } from "@/lib/api";
 import { parseBulkImportText } from "@/lib/bulkImportParser";
 import ObjectPositionPicker from "@/components/ObjectPositionPicker";
+import TestimonialsTab from "@/components/admin/TestimonialsTab";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -151,6 +152,7 @@ export default function AdminPanel() {
           <TabsTrigger value="orders" data-testid="tab-orders">Order</TabsTrigger>
           <TabsTrigger value="customers" data-testid="tab-customers">History Pembeli</TabsTrigger>
           <TabsTrigger value="banners" data-testid="tab-banners">Banner Promo</TabsTrigger>
+          <TabsTrigger value="testimonials" data-testid="tab-testimonials">Testimoni</TabsTrigger>
           <TabsTrigger value="affiliates" data-testid="tab-affiliates">Affiliate</TabsTrigger>
           <TabsTrigger value="withdrawals" data-testid="tab-withdrawals">WD</TabsTrigger>
           <TabsTrigger value="loyalty" data-testid="tab-loyalty">Loyalty</TabsTrigger>
@@ -194,6 +196,9 @@ export default function AdminPanel() {
         </TabsContent>
         <TabsContent value="banners" className="mt-6">
           <BannersTab api={api} />
+        </TabsContent>
+        <TabsContent value="testimonials" className="mt-6">
+          <TestimonialsTab api={api} />
         </TabsContent>
         <TabsContent value="affiliates" className="mt-6">
           <AffiliatesTab api={api} password={password} />
@@ -335,6 +340,41 @@ function ProductsTab({ api }) {
       toast.success(`Urutan direset (${r.data.reset} produk)`);
       load();
     } catch { toast.error("Gagal reset urutan"); }
+  };
+
+  // Inline reorder: set specific position (1-based) or move to edge
+  const publishedListSorted = filtered.filter((p) => p.publish_status !== "draft");
+  const draftListSorted = filtered.filter((p) => p.publish_status === "draft");
+  const positionMap = useMemo(() => {
+    const m = {};
+    publishedListSorted.forEach((p, i) => { m[p.id] = i + 1; });
+    draftListSorted.forEach((p, i) => { m[p.id] = i + 1; });
+    return m;
+  }, [publishedListSorted, draftListSorted]);
+
+  const setProductPosition = async (productId, targetPos) => {
+    const posNum = parseInt(targetPos, 10);
+    if (isNaN(posNum) || posNum < 1) {
+      toast.error("Posisi harus angka minimal 1");
+      return;
+    }
+    try {
+      await api.post("/admin/products/set-position", { product_id: productId, position: posNum });
+      toast.success(`Urutan diubah ✓ (posisi #${posNum})`);
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Gagal ubah posisi");
+    }
+  };
+
+  const moveProductToEdge = async (productId, edge) => {
+    try {
+      const r = await api.post("/admin/products/move-to-edge", { product_id: productId, edge });
+      toast.success(edge === "top" ? `Dipindah ke teratas ✓` : `Dipindah ke terbawah ✓ (posisi #${r.data.new_position})`);
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Gagal pindah posisi");
+    }
   };
 
   const togglePublish = async (product) => {
@@ -506,7 +546,7 @@ function ProductsTab({ api }) {
       <Table>
         <TableHeader>
           <TableRow className="border-white/10 hover:bg-transparent">
-            <TableHead className="text-white/60 w-6"></TableHead>
+            <TableHead className="text-white/60 w-20">Urutan</TableHead>
             <TableHead className="text-white/60 w-8">
               <input
                 type="checkbox"
@@ -530,10 +570,14 @@ function ProductsTab({ api }) {
               product={p}
               catNameMap={catNameMap}
               selectedIds={selectedIds}
+              currentPosition={positionMap[p.id] || 0}
+              groupTotal={p.publish_status === "draft" ? draftListSorted.length : publishedListSorted.length}
               onToggleSelect={toggleSelect}
               onTogglePublish={togglePublish}
               onEdit={(prod) => { setEditing(prod); setOpen(true); }}
               onDelete={remove}
+              onSetPosition={setProductPosition}
+              onMoveToEdge={moveProductToEdge}
             />
           ))}
         </TableBody>
@@ -617,7 +661,7 @@ function ProductsTab({ api }) {
 }
 
 // ---------- SortableProductRow (dnd-kit) ----------
-function SortableProductRow({ product: p, catNameMap, selectedIds, onToggleSelect, onTogglePublish, onEdit, onDelete }) {
+function SortableProductRow({ product: p, catNameMap, selectedIds, currentPosition, groupTotal, onToggleSelect, onTogglePublish, onEdit, onDelete, onSetPosition, onMoveToEdge }) {
   const {
     attributes,
     listeners,
@@ -637,6 +681,21 @@ function SortableProductRow({ product: p, catNameMap, selectedIds, onToggleSelec
     position: "relative",
   };
 
+  const [posInput, setPosInput] = useState(String(currentPosition || ""));
+  useEffect(() => { setPosInput(String(currentPosition || "")); }, [currentPosition]);
+
+  const submitPos = (e) => {
+    e.preventDefault();
+    const v = parseInt(posInput, 10);
+    if (isNaN(v) || v < 1) {
+      toast.error("Posisi minimal 1");
+      setPosInput(String(currentPosition || ""));
+      return;
+    }
+    if (v === currentPosition) return;
+    onSetPosition && onSetPosition(p.id, v);
+  };
+
   const has = p.discount_active && p.discount_price;
   const incomplete = !p.photo_url || !p.original_price || p.original_price <= 0;
   const isDraft = p.publish_status === "draft";
@@ -645,20 +704,55 @@ function SortableProductRow({ product: p, catNameMap, selectedIds, onToggleSelec
     <TableRow
       ref={setNodeRef}
       style={style}
-      className="border-white/5 touch-none"
+      className="border-white/5 touch-none group"
       data-testid={`product-row-${p.id}`}
     >
-      <TableCell className="w-6 p-1">
-        <button
-          type="button"
-          data-testid={`drag-handle-${p.id}`}
-          {...attributes}
-          {...listeners}
-          aria-label="Drag untuk ubah urutan"
-          className="p-1 rounded text-white/30 hover:text-[#F5A623] hover:bg-white/5 cursor-grab active:cursor-grabbing touch-none"
-        >
-          <GripVertical size={14} />
-        </button>
+      <TableCell className="w-20 p-1 align-middle">
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            data-testid={`drag-handle-${p.id}`}
+            {...attributes}
+            {...listeners}
+            aria-label="Drag untuk ubah urutan"
+            className="p-1 rounded text-white/30 hover:text-[#F5A623] hover:bg-white/5 cursor-grab active:cursor-grabbing touch-none flex-shrink-0"
+          >
+            <GripVertical size={14} />
+          </button>
+          <form onSubmit={submitPos} className="flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+            <input
+              type="number"
+              min={1}
+              data-testid={`pos-input-${p.id}`}
+              value={posInput}
+              onChange={(e) => setPosInput(e.target.value)}
+              onBlur={submitPos}
+              onKeyDown={(e) => { if (e.key === "Escape") { setPosInput(String(currentPosition || "")); e.currentTarget.blur(); } }}
+              className="w-11 h-7 text-center text-xs bg-white/5 border border-white/15 rounded focus:border-[#F5A623] focus:outline-none focus:ring-1 focus:ring-[#F5A623]/40 no-spinner"
+              title={`Ubah posisi (saat ini #${currentPosition} dari ${groupTotal || 1})`}
+            />
+          </form>
+        </div>
+        <div className="mt-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            type="button"
+            data-testid={`set-top-${p.id}`}
+            onClick={() => onMoveToEdge && onMoveToEdge(p.id, "top")}
+            title="Set ke Teratas"
+            className="text-[9px] px-1.5 py-0.5 rounded bg-[#F5A623]/10 text-[#F5A623] hover:bg-[#F5A623]/20 border border-[#F5A623]/30 font-medium"
+          >
+            ↑ Top
+          </button>
+          <button
+            type="button"
+            data-testid={`set-bottom-${p.id}`}
+            onClick={() => onMoveToEdge && onMoveToEdge(p.id, "bottom")}
+            title="Set ke Terbawah"
+            className="text-[9px] px-1.5 py-0.5 rounded bg-white/5 text-white/50 hover:bg-white/10 border border-white/15 font-medium"
+          >
+            ↓ End
+          </button>
+        </div>
       </TableCell>
       <TableCell>
         <input

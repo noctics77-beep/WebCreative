@@ -45,6 +45,13 @@ export default function Footer() {
           >
             Lacak Pesanan
           </a>
+          <a
+            href="/testimoni"
+            data-testid="footer-testimoni-link"
+            className="text-xs text-white/60 hover:text-[#F5A623] transition-colors"
+          >
+            Testimoni
+          </a>
           <p className="text-xs uppercase tracking-[0.25em] text-white/30 hidden md:block">
             Access • Premium • Trusted
           </p>

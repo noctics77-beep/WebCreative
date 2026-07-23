@@ -1,0 +1,37 @@
+{
+  "summary": "Iteration 14 tested: Testimonials CRUD + Inline product reorder (set-position/move-to-edge). 20/20 backend pytest passed after route-ordering bug fix. Frontend: /testimoni page, submit modal, admin Testimoni tab with 5 sub-tabs, Products inline reorder inputs (pos-input, set-top, set-bottom), storefront TestimonialCarousel, navbar/footer links all verified working.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Testimoni submit modal", "issues": ["Radix UI a11y warning: DialogContent missing Description/aria-describedby — non-blocking but should be added for accessibility"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration14.py",
+    "/app/test_reports/pytest/iter14.xml"
+  ],
+  "action_items": [
+    "(Optional a11y) Add DialogDescription or aria-describedby to submit-testimoni Dialog in /app/frontend/src/pages/Testimonials.jsx to silence Radix warnings."
+  ],
+  "critical_code_review_comments": [
+    "FIXED: FastAPI route-ordering bug — PUT /api/admin/testimonials/settings was declared AFTER PUT /api/admin/testimonials/{tid}, so requests to /settings matched {tid} and returned 422 (missing name/content fields). Moved settings endpoint above the {tid} routes. Applied in /app/backend/server.py.",
+    "server.py is 4288 lines — recommend splitting into modules (testimonials, products, orders) for maintainability.",
+    "TestimonialCarousel currently shows only when items exist; storefront section verified with 1 approved testimonial from smoke test."
+  ],
+  "updated_files": [
+    "/app/backend/server.py (reordered PUT /admin/testimonials/settings before /{tid} routes to fix 422)",
+    "/app/backend/tests/test_iteration14.py (created)"
+  ],
+  "success_rate": {"backend": "100% (20/20)", "frontend": "100% (all UI checks pass)"},
+  "test_credentials": "Admin password Blokirsandi12 (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Created a few TEST_ prefixed testimonials during pytest; auto-cleaned via fixture teardown for tracked ids. One additional TEST_ToApprove approved testimonial may remain (used to verify public list flow) — safe to delete via admin panel.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All P0 endpoints verified. If revisiting, note only 2 products (both drafts) exist in DB — reorder tests use draft group. TestimonialCarousel selector = data-testid='testimonials-section'. Public page selector = data-testid='testimonials-page'. Admin sub-tabs found via text match: Menunggu/Ditampilkan/Disembunyikan/Posting Admin/Settings.",
+  "rca of the issue": "Route-ordering bug: FastAPI matches path routes in registration order. Because PUT /admin/testimonials/{tid} was registered first, requests to /admin/testimonials/settings were matched with tid='settings' expecting a TestimonialAdminCreate body (which requires name+content). Fix: register the literal /settings route before the parametric /{tid} route."
+}

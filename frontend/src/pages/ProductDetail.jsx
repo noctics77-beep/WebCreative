@@ -4,6 +4,7 @@ import { api, formatIDR, resolveImageUrl } from "@/lib/api";
 import OrderModal from "@/components/OrderModal";
 import WaitlistModal from "@/components/WaitlistModal";
 import ReviewSection from "@/components/ReviewSection";
+import ProductTestimonials from "@/components/ProductTestimonials";
 import ShareButtons from "@/components/ShareButtons";
 import StockBadge from "@/components/StockBadge";
 import { ArrowLeft, ShoppingBag, Bell, Flame, Zap, Sparkles, Tag, Hourglass, Check, ChevronRight, Loader2 } from "lucide-react";
@@ -342,6 +343,9 @@ export default function ProductDetail() {
 
       {/* Ulasan */}
       <ReviewSection productId={product.id} />
+
+      {/* Testimoni Pembeli untuk produk ini */}
+      <ProductTestimonials productId={product.id} productName={product.name} />
 
       <OrderModal
         open={showOrder}

@@ -2,3 +2,13 @@
     min-height: 100vh;
     background: #0f1117;
 }
+
+/* Hide number input spinners for compact inline inputs */
+.no-spinner::-webkit-outer-spin-button,
+.no-spinner::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+.no-spinner[type=number] {
+    -moz-appearance: textfield;
+}

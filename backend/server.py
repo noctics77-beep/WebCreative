@@ -3690,6 +3690,480 @@ async def admin_delete_banner(banner_id: str, x_admin_password: Optional[str] = 
     return {"deleted": r.deleted_count}
 
 
+# =============================================================================
+# INLINE PRODUCT REORDER — set-position + move-to-edge
+# =============================================================================
+class SetPositionPayload(BaseModel):
+    product_id: str
+    position: int  # 1-based target position within its status group
+
+
+class MoveEdgePayload(BaseModel):
+    product_id: str
+    edge: str  # "top" | "bottom"
+
+
+async def _renumber_group_after_move(product_id: str, target_index: int) -> int:
+    """Move product to target_index (0-based) within its status group. Renumber all products
+    across groups: published first (order 10, 20, ...) then draft (continuing after published)."""
+    prod = await db.products.find_one({"id": product_id}, {"_id": 0})
+    if not prod:
+        raise HTTPException(404, "Produk tidak ditemukan")
+    group = prod.get("publish_status", "published")
+
+    all_prods = await db.products.find(
+        {}, {"_id": 0, "id": 1, "publish_status": 1, "display_order": 1, "created_at": 1}
+    ).to_list(5000)
+
+    # Split by group, sort each by (display_order, created_at desc)
+    def sort_key(p):
+        return (int(p.get("display_order") or 999), p.get("created_at") or "")
+
+    grp_items = [p for p in all_prods if (p.get("publish_status") or "published") == group and p["id"] != product_id]
+    other_items = [p for p in all_prods if (p.get("publish_status") or "published") != group]
+
+    grp_items.sort(key=sort_key)
+    other_items.sort(key=sort_key)
+
+    idx = max(0, min(len(grp_items), target_index))
+    grp_items.insert(idx, prod)
+
+    # Assign order: published first (10, 20, ...), then draft continuing after
+    published_final = grp_items if group == "published" else other_items
+    draft_final = other_items if group == "published" else grp_items
+    if group != "published":
+        published_final = other_items
+        draft_final = grp_items
+
+    ops = []
+    for i, p in enumerate(published_final):
+        ops.append((p["id"], (i + 1) * 10))
+    base = (len(published_final) + 1) * 10
+    for i, p in enumerate(draft_final):
+        ops.append((p["id"], base + i * 10))
+
+    for pid, order in ops:
+        await db.products.update_one({"id": pid}, {"$set": {"display_order": order}})
+
+    return idx + 1  # 1-based new position
+
+
+@api_router.post("/admin/products/set-position")
+async def admin_set_product_position(payload: SetPositionPayload, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    if payload.position < 1:
+        raise HTTPException(400, "Posisi minimal 1")
+    new_pos = await _renumber_group_after_move(payload.product_id, payload.position - 1)
+    return {"ok": True, "new_position": new_pos}
+
+
+@api_router.post("/admin/products/move-to-edge")
+async def admin_move_product_to_edge(payload: MoveEdgePayload, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    edge = (payload.edge or "").lower()
+    if edge not in ("top", "bottom"):
+        raise HTTPException(400, "edge harus 'top' atau 'bottom'")
+    if edge == "top":
+        new_pos = await _renumber_group_after_move(payload.product_id, 0)
+    else:
+        new_pos = await _renumber_group_after_move(payload.product_id, 10_000)
+    return {"ok": True, "new_position": new_pos}
+
+
+# =============================================================================
+# TESTIMONIALS
+# =============================================================================
+DEFAULT_TESTIMONIAL_SETTINGS = {
+    "form_enabled": True,
+    "satisfied_customers_text": "5.000+",
+    "claim_text": "Sobat Creative yang sudah cuan bareng kami!",
+    "public_page_headline": "Cerita nyata dari Sobat Creative",
+    "public_page_subheadline": "Testimoni asli dari pembeli setia CreativeStore. Semua sudah di-verifikasi manual oleh admin.",
+}
+
+
+class Testimonial(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    whatsapp: str = ""
+    product_id: str = ""
+    product_name: str = ""
+    rating: int = 5
+    content: str
+    photos: List[str] = []  # list of URLs (max 3 public, max 5 admin)
+    status: str = "pending"  # pending | approved | hidden | rejected
+    source: str = "public"  # public | admin
+    is_verified_buyer: bool = False
+    is_admin_post: bool = False
+    is_pinned: bool = False
+    created_at: str = Field(default_factory=now_iso)
+    approved_at: str = ""
+    display_order: int = 1000
+
+
+class TestimonialSubmit(BaseModel):
+    name: str
+    whatsapp: str = ""
+    product_id: str = ""
+    rating: int = 5
+    content: str
+    photos: List[str] = []
+
+
+class TestimonialAdminCreate(BaseModel):
+    name: str
+    whatsapp: str = ""
+    product_id: str = ""
+    rating: int = 5
+    content: str
+    photos: List[str] = []
+    is_verified_buyer: bool = False
+    is_admin_post: bool = True
+    is_pinned: bool = False
+
+
+class TestimonialStatusUpdate(BaseModel):
+    status: str  # approved | hidden | pending | rejected
+
+
+class TestimonialSettingsUpdate(BaseModel):
+    form_enabled: bool = True
+    satisfied_customers_text: str = "5.000+"
+    claim_text: str = ""
+    public_page_headline: str = ""
+    public_page_subheadline: str = ""
+
+
+TESTIMONIAL_MAX_PHOTO_BYTES = 3 * 1024 * 1024  # 3 MB per foto
+
+
+async def _testimonial_settings_doc() -> dict:
+    doc = await db.settings.find_one({"id": "testimonials"}, {"_id": 0}) or {}
+    return {k: doc.get(k, v) for k, v in DEFAULT_TESTIMONIAL_SETTINGS.items()}
+
+
+async def _check_verified_buyer(whatsapp: str, product_id: str = "") -> bool:
+    if not whatsapp:
+        return False
+    q = {"customer_contact": {"$regex": re.escape(whatsapp[-8:]), "$options": "i"}, "status": {"$in": ["paid", "confirmed"]}}
+    if product_id:
+        q["product_id"] = product_id
+    n = await db.orders.count_documents(q)
+    return n > 0
+
+
+def _testimonial_view(t: dict) -> dict:
+    """Public-safe serialization: hide WA number."""
+    wa = t.get("whatsapp") or ""
+    masked = ""
+    if wa:
+        masked = wa[:3] + "*" * max(0, len(wa) - 6) + wa[-3:] if len(wa) > 6 else "***"
+    return {
+        "id": t["id"],
+        "name": t.get("name") or "Anonim",
+        "whatsapp_masked": masked,
+        "product_id": t.get("product_id", ""),
+        "product_name": t.get("product_name", ""),
+        "rating": int(t.get("rating") or 5),
+        "content": t.get("content") or "",
+        "photos": t.get("photos") or [],
+        "is_verified_buyer": bool(t.get("is_verified_buyer")),
+        "is_admin_post": bool(t.get("is_admin_post")),
+        "is_pinned": bool(t.get("is_pinned")),
+        "created_at": t.get("created_at"),
+    }
+
+
+# ---------- Public upload for testimonial photos ----------
+@api_router.post("/testimonials/upload")
+async def public_testimonial_upload(request: Request, file: UploadFile = File(...)):
+    """Public upload endpoint khusus foto testimoni. Max 3MB per file."""
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > TESTIMONIAL_MAX_PHOTO_BYTES + 8192:
+        raise HTTPException(400, "Ukuran foto maksimal 3MB")
+
+    content_type = (file.content_type or "").lower()
+    if content_type not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(400, "File harus berupa gambar (JPG/PNG/WEBP)")
+
+    data = await file.read()
+    size = len(data)
+    if size > TESTIMONIAL_MAX_PHOTO_BYTES:
+        raise HTTPException(400, f"Ukuran foto maksimal 3MB (saat ini {size / 1024 / 1024:.1f}MB)")
+    if size == 0:
+        raise HTTPException(400, "File kosong")
+
+    upload_id = str(uuid.uuid4())
+    await db.uploads.insert_one({
+        "id": upload_id,
+        "filename": file.filename or f"{upload_id}",
+        "content_type": content_type,
+        "size": size,
+        "data": data,
+        "source": "testimonial",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    })
+    return {"url": f"/api/uploads/{upload_id}", "id": upload_id, "size": size}
+
+
+# ---------- Public list ----------
+@api_router.get("/testimonials")
+async def public_list_testimonials(
+    product_id: Optional[str] = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+):
+    q = {"status": "approved"}
+    if product_id:
+        q["product_id"] = product_id
+    rows = await db.testimonials.find(q, {"_id": 0}).sort([
+        ("is_pinned", -1),
+        ("display_order", 1),
+        ("created_at", -1),
+    ]).to_list(limit)
+    items = [_testimonial_view(t) for t in rows]
+    # rating summary if product_id given
+    summary = {}
+    if product_id and items:
+        ratings = [int(t.get("rating") or 5) for t in rows]
+        summary = {
+            "count": len(ratings),
+            "avg": round(sum(ratings) / max(1, len(ratings)), 2),
+        }
+    return {"items": items, "summary": summary}
+
+
+@api_router.get("/testimonials/settings")
+async def public_testimonial_settings():
+    s = await _testimonial_settings_doc()
+    return s
+
+
+# ---------- Public submission ----------
+@api_router.post("/testimonials")
+async def public_submit_testimonial(payload: TestimonialSubmit):
+    s = await _testimonial_settings_doc()
+    if not s.get("form_enabled", True):
+        raise HTTPException(403, "Form testimoni sedang ditutup, silakan coba lagi nanti.")
+
+    name = (payload.name or "").strip()
+    content = (payload.content or "").strip()
+    if len(name) < 2:
+        raise HTTPException(400, "Nama minimal 2 karakter")
+    if len(content) < 10:
+        raise HTTPException(400, "Isi testimoni minimal 10 karakter")
+
+    rating = max(1, min(5, int(payload.rating or 5)))
+    photos = [p for p in (payload.photos or []) if p][:3]  # max 3
+
+    # Resolve product name
+    product_name = ""
+    if payload.product_id:
+        prod = await db.products.find_one({"id": payload.product_id}, {"_id": 0, "name": 1})
+        if prod:
+            product_name = prod.get("name", "")
+
+    verified = False
+    if payload.whatsapp:
+        verified = await _check_verified_buyer(payload.whatsapp, payload.product_id or "")
+
+    t = Testimonial(
+        name=name,
+        whatsapp=payload.whatsapp or "",
+        product_id=payload.product_id or "",
+        product_name=product_name,
+        rating=rating,
+        content=content,
+        photos=photos,
+        status="pending",
+        source="public",
+        is_verified_buyer=verified,
+        is_admin_post=False,
+    )
+    await db.testimonials.insert_one(t.model_dump())
+
+    # Notify admin via Telegram
+    try:
+        badge = "✅ Verified Buyer" if verified else "🆕 Baru"
+        prod_line = f"\n📦 Produk: {product_name}" if product_name else ""
+        msg = (
+            f"💬 <b>Testimoni Baru Masuk!</b>\n"
+            f"👤 {name} ({badge})\n"
+            f"⭐ Rating: {'⭐' * rating}"
+            f"{prod_line}\n"
+            f"📝 {content[:200]}{'...' if len(content) > 200 else ''}\n"
+            f"📸 {len(photos)} foto"
+            f"\n\n🔗 Approve di /admin → tab Testimoni"
+        )
+        await send_telegram(msg)
+    except Exception as e:
+        logger.error(f"Telegram testimonial notif failed: {e}")
+
+    return {"ok": True, "id": t.id, "message": "Terima kasih! Testimoni kamu sedang diperiksa admin ya, Sobat Creative 💛"}
+
+
+# ---------- Admin endpoints ----------
+# NOTE: PUT /admin/testimonials/settings must be declared BEFORE PUT /admin/testimonials/{tid}
+# so FastAPI doesn't match "settings" as a {tid} path param.
+@api_router.put("/admin/testimonials/settings")
+async def admin_update_testimonial_settings(
+    payload: TestimonialSettingsUpdate,
+    x_admin_password: Optional[str] = Header(None),
+):
+    await verify_admin(x_admin_password)
+    data = {"id": "testimonials", **payload.model_dump()}
+    await db.settings.update_one({"id": "testimonials"}, {"$set": data}, upsert=True)
+    return {k: data[k] for k in DEFAULT_TESTIMONIAL_SETTINGS.keys()}
+
+
+@api_router.get("/admin/testimonials")
+async def admin_list_testimonials(
+    status: Optional[str] = Query(None),
+    source: Optional[str] = Query(None),
+    x_admin_password: Optional[str] = Header(None),
+):
+    await verify_admin(x_admin_password)
+    q = {}
+    if status:
+        q["status"] = status
+    if source:
+        q["source"] = source
+    rows = await db.testimonials.find(q, {"_id": 0}).sort([
+        ("is_pinned", -1),
+        ("created_at", -1),
+    ]).to_list(1000)
+    return rows
+
+
+@api_router.get("/admin/testimonials/counts")
+async def admin_testimonial_counts(x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    pipeline = [{"$group": {"_id": "$status", "count": {"$sum": 1}}}]
+    rows = await db.testimonials.aggregate(pipeline).to_list(20)
+    counts = {r["_id"]: r["count"] for r in rows}
+    admin_count = await db.testimonials.count_documents({"source": "admin"})
+    return {
+        "pending": counts.get("pending", 0),
+        "approved": counts.get("approved", 0),
+        "hidden": counts.get("hidden", 0),
+        "rejected": counts.get("rejected", 0),
+        "admin_posts": admin_count,
+    }
+
+
+@api_router.post("/admin/testimonials")
+async def admin_create_testimonial(
+    payload: TestimonialAdminCreate,
+    x_admin_password: Optional[str] = Header(None),
+):
+    await verify_admin(x_admin_password)
+    name = (payload.name or "").strip()
+    content = (payload.content or "").strip()
+    if len(name) < 2:
+        raise HTTPException(400, "Nama minimal 2 karakter")
+    if len(content) < 5:
+        raise HTTPException(400, "Isi testimoni minimal 5 karakter")
+
+    photos = [p for p in (payload.photos or []) if p][:5]  # admin bisa 5
+
+    product_name = ""
+    if payload.product_id:
+        prod = await db.products.find_one({"id": payload.product_id}, {"_id": 0, "name": 1})
+        if prod:
+            product_name = prod.get("name", "")
+
+    t = Testimonial(
+        name=name,
+        whatsapp=payload.whatsapp or "",
+        product_id=payload.product_id or "",
+        product_name=product_name,
+        rating=max(1, min(5, int(payload.rating or 5))),
+        content=content,
+        photos=photos,
+        status="approved",  # admin posts auto-approved
+        source="admin",
+        is_verified_buyer=bool(payload.is_verified_buyer),
+        is_admin_post=bool(payload.is_admin_post),
+        is_pinned=bool(payload.is_pinned),
+        approved_at=now_iso(),
+    )
+    await db.testimonials.insert_one(t.model_dump())
+    return t.model_dump()
+
+
+@api_router.put("/admin/testimonials/{tid}")
+async def admin_update_testimonial(
+    tid: str,
+    payload: TestimonialAdminCreate,
+    x_admin_password: Optional[str] = Header(None),
+):
+    await verify_admin(x_admin_password)
+    existing = await db.testimonials.find_one({"id": tid}, {"_id": 0})
+    if not existing:
+        raise HTTPException(404, "Testimoni tidak ditemukan")
+
+    photos = [p for p in (payload.photos or []) if p][:5]
+    product_name = ""
+    if payload.product_id:
+        prod = await db.products.find_one({"id": payload.product_id}, {"_id": 0, "name": 1})
+        if prod:
+            product_name = prod.get("name", "")
+
+    update = {
+        "name": payload.name.strip(),
+        "whatsapp": payload.whatsapp or "",
+        "product_id": payload.product_id or "",
+        "product_name": product_name,
+        "rating": max(1, min(5, int(payload.rating or 5))),
+        "content": payload.content.strip(),
+        "photos": photos,
+        "is_verified_buyer": bool(payload.is_verified_buyer),
+        "is_admin_post": bool(payload.is_admin_post),
+        "is_pinned": bool(payload.is_pinned),
+    }
+    await db.testimonials.update_one({"id": tid}, {"$set": update})
+    return {"ok": True}
+
+
+@api_router.patch("/admin/testimonials/{tid}/status")
+async def admin_update_testimonial_status(
+    tid: str,
+    payload: TestimonialStatusUpdate,
+    x_admin_password: Optional[str] = Header(None),
+):
+    await verify_admin(x_admin_password)
+    if payload.status not in ("pending", "approved", "hidden", "rejected"):
+        raise HTTPException(400, "Status tidak valid")
+    update = {"status": payload.status}
+    if payload.status == "approved":
+        update["approved_at"] = now_iso()
+    r = await db.testimonials.update_one({"id": tid}, {"$set": update})
+    if r.matched_count == 0:
+        raise HTTPException(404, "Testimoni tidak ditemukan")
+    return {"ok": True, "status": payload.status}
+
+
+@api_router.patch("/admin/testimonials/{tid}/pin")
+async def admin_toggle_testimonial_pin(
+    tid: str,
+    x_admin_password: Optional[str] = Header(None),
+):
+    await verify_admin(x_admin_password)
+    t = await db.testimonials.find_one({"id": tid}, {"_id": 0, "is_pinned": 1})
+    if not t:
+        raise HTTPException(404, "Testimoni tidak ditemukan")
+    new_val = not bool(t.get("is_pinned"))
+    await db.testimonials.update_one({"id": tid}, {"$set": {"is_pinned": new_val}})
+    return {"ok": True, "is_pinned": new_val}
+
+
+@api_router.delete("/admin/testimonials/{tid}")
+async def admin_delete_testimonial(tid: str, x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    r = await db.testimonials.delete_one({"id": tid})
+    return {"deleted": r.deleted_count}
+
+
 app.include_router(api_router)
 app.add_middleware(
     CORSMiddleware,

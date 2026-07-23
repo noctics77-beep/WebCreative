@@ -14,6 +14,7 @@ import AdminPanel from "@/pages/AdminPanel";
 import LoyaltyPage from "@/pages/LoyaltyPage";
 import TrackOrder from "@/pages/TrackOrder";
 import ProductDetail from "@/pages/ProductDetail";
+import Testimonials from "@/pages/Testimonials";
 import FAQ from "@/pages/FAQ";
 import About from "@/pages/About";
 import NavBar from "@/components/NavBar";
@@ -53,6 +54,7 @@ export default function App() {
             <Route path="/admin" element={<AdminPanel />} />
             <Route path="/loyalty" element={<LoyaltyPage />} />
             <Route path="/lacak-pesanan" element={<TrackOrder />} />
+            <Route path="/testimoni" element={<Testimonials />} />
           </Routes>
           <Footer />
           <ChatWidget />
