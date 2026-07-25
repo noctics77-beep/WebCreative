@@ -223,3 +223,34 @@ Admin (X-Admin-Password): `GET/POST /api/admin/testimonials`, `GET /api/admin/te
 - P1: Resend Email integration for Waitlist notifications (blocked pending RESEND_API_KEY from user).
 - P2: Refactor `AdminPanel.jsx` (~4700 lines) → split tabs into `components/admin/` folder (start done with `TestimonialsTab.jsx`).
 - P2: Split `backend/server.py` (4288 lines) into route modules (products, orders, testimonials, payments).
+
+## Iteration 15 (Feb 2026) — Pending Reminder + QRIS Manual UX + Screenshot Instructions
+
+### Pending Order Reminder
+- APScheduler `pending_order_reminder` job runs every 15 minutes and checks pending manual-payment orders (`qris` or `transfer` methods) that have been unconfirmed longer than the configured interval.
+- Settings (Admin > Settings > Reminder Order): `pending_reminder_enabled` toggle, `pending_reminder_interval_minutes` (15/30/60/120), `pending_reminder_max_count` (1/2/3/5, default 3).
+- Anti-spam: per-order `admin_reminder_count` + `last_admin_reminder_at` fields on Order model; stops after max_count; auto-halts when order is confirmed/cancelled.
+- Telegram admin bot receives formatted message with Order ID, buyer, product, total, method, minutes waited, and direct admin link.
+
+### QRIS Manual UX Fixes (OrderModal)
+- 10-min countdown timer above QR (`data-testid="manual-qris-countdown"`) — red when < 2min.
+- Warning card `"⚠️ PENTING: Setelah scan dan bayar, klik tombol Saya Sudah Bayar..."` (`data-testid="manual-payment-warning"`).
+- Big pulsing gold confirm button `"Saya Sudah Bayar ✓"` (box-shadow-only pulse, click-stable).
+- Optional transfer amount input (`data-testid="transfer-amount-input"`).
+- Toast reminder every 2 minutes: "Sudah bayar? Jangan lupa klik 'Saya Sudah Bayar' ya!".
+- `beforeunload` browser dialog prevents accidentally closing the page.
+- On timer expiry, hides QR and shows "Generate QR Baru" button (`data-testid="regenerate-qris-btn"`).
+- Same UX applied for Transfer Bank flow (warning + amount + pulsing button + timer).
+
+### Screenshot Instructions (Success Screen)
+- Manual payment success shows instructions card (`data-testid="screenshot-instructions"`) with 3-step numbered list + real Order ID + "Chat Admin WhatsApp" green shortcut and "Salin Order ID" button.
+- Chat admin WhatsApp link: `wa.me/{admin_whatsapp}?text=Halo admin, saya sudah bayar. Order ID saya: {order_code}`.
+- Auto-paid (qris_otomatis) success shows green `auto-paid-info` card instead ("Pembayaran otomatis terkonfirmasi").
+- `GET /api/config` now prefers `settings.admin_whatsapp` over env `ADMIN_WHATSAPP` (editable in Admin Settings).
+- Best-effort public bot Telegram notification on order creation reminds buyer to screenshot + send Order ID to admin WA.
+
+### Backlog / Upcoming
+- P1: Resend Email integration for Waitlist notifications (blocked pending RESEND_API_KEY from user).
+- P2: Split `backend/server.py` (4325 lines) into route modules (products/orders/testimonials/settings).
+- P2: Split `frontend/components/OrderModal.jsx` (1187 lines) into ManualPaymentStep + SuccessCard subcomponents.
+
