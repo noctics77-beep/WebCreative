@@ -2125,6 +2125,10 @@ function SettingsTab({ api }) {
     pay_qris_manual_enabled: true,
     pay_transfer_enabled: true,
     telegram_group_url: "",
+    admin_whatsapp: "",
+    pending_reminder_enabled: true,
+    pending_reminder_interval_minutes: 30,
+    pending_reminder_max_count: 3,
   });
   const [namesText, setNamesText] = useState("");
   const [loading, setLoading] = useState(true);
@@ -2258,6 +2262,64 @@ function SettingsTab({ api }) {
           />
           <p className="text-[10px] text-white/45 mt-1">Kalau diisi, section &quot;Gabung Grup Telegram&quot; tampil di popup konfirmasi order.</p>
         </Field>
+
+        <h3 className="font-display text-lg pt-2">Kontak Admin</h3>
+        <Field label="Nomor WhatsApp Admin (tanpa +, contoh: 6281234567890)">
+          <Input
+            data-testid="settings-admin-whatsapp"
+            value={stats.admin_whatsapp || ""}
+            onChange={(e) => setStats({ ...stats, admin_whatsapp: e.target.value })}
+            placeholder="6281234567890"
+            className="bg-[#0f1117] border-white/15 focus-visible:ring-[#F5A623]/30 focus-visible:border-[#F5A623]"
+          />
+          <p className="text-[10px] text-white/45 mt-1">
+            Digunakan untuk tombol &quot;Chat Admin WhatsApp&quot; di halaman konfirmasi order. Kalau kosong, tombol tidak tampil.
+          </p>
+        </Field>
+
+        <h3 className="font-display text-lg pt-2">Reminder Order Belum Dikonfirmasi</h3>
+        <div className="rounded-lg bg-[#0f1117] border border-white/10 p-3 space-y-3" data-testid="reminder-settings">
+          <div className="flex items-center justify-between">
+            <div>
+              <Label className="text-sm">Aktifkan reminder ke Telegram admin</Label>
+              <p className="text-[11px] text-white/50 mt-0.5">Otomatis notif setiap X menit untuk order manual yg belum di-confirm.</p>
+            </div>
+            <Switch
+              data-testid="toggle-pending-reminder"
+              checked={stats.pending_reminder_enabled !== false}
+              onCheckedChange={(v) => setStats({ ...stats, pending_reminder_enabled: v })}
+              className="data-[state=checked]:bg-[#F5A623]"
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Kirim reminder setelah">
+              <select
+                data-testid="reminder-interval-select"
+                value={stats.pending_reminder_interval_minutes || 30}
+                onChange={(e) => setStats({ ...stats, pending_reminder_interval_minutes: parseInt(e.target.value, 10) })}
+                className="w-full bg-[#0f1117] border border-white/15 rounded-md px-3 py-2 text-sm text-white"
+              >
+                <option value={15}>15 menit</option>
+                <option value={30}>30 menit</option>
+                <option value={60}>1 jam</option>
+                <option value={120}>2 jam</option>
+              </select>
+            </Field>
+            <Field label="Maksimal reminder per order">
+              <select
+                data-testid="reminder-max-count-select"
+                value={stats.pending_reminder_max_count || 3}
+                onChange={(e) => setStats({ ...stats, pending_reminder_max_count: parseInt(e.target.value, 10) })}
+                className="w-full bg-[#0f1117] border border-white/15 rounded-md px-3 py-2 text-sm text-white"
+              >
+                <option value={1}>1x</option>
+                <option value={2}>2x</option>
+                <option value={3}>3x</option>
+                <option value={5}>5x</option>
+              </select>
+            </Field>
+          </div>
+        </div>
 
         <h3 className="font-display text-lg pt-2">Live Activity Feed</h3>
         <div className="flex items-center justify-between px-3 py-2 rounded-md bg-[#0f1117] border border-white/10">

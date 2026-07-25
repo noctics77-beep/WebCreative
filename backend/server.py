@@ -388,6 +388,9 @@ class Order(BaseModel):
     expires_at: Optional[str] = None
     paid_via: Optional[str] = None
     paid_at: Optional[str] = None
+    # Admin reminder tracking
+    admin_reminder_count: int = 0
+    last_admin_reminder_at: Optional[str] = None
 
 
 class OrderCreate(BaseModel):
@@ -518,7 +521,9 @@ async def get_product(product_id: str):
 # ---------- Public: Config ----------
 @api_router.get("/config")
 async def get_config():
-    return {"admin_whatsapp": ADMIN_WHATSAPP}
+    doc = await db.settings.find_one({"id": "stats"}, {"_id": 0}) or {}
+    admin_wa = (doc.get("admin_whatsapp") or "").strip() or ADMIN_WHATSAPP
+    return {"admin_whatsapp": admin_wa}
 
 
 # ---------- Public: Stats / Settings ----------
@@ -550,6 +555,12 @@ DEFAULT_STATS = {
     "pay_transfer_enabled": True,
     # Community
     "telegram_group_url": "",
+    # Admin contact
+    "admin_whatsapp": "",
+    # Pending order reminder to admin
+    "pending_reminder_enabled": True,
+    "pending_reminder_interval_minutes": 30,
+    "pending_reminder_max_count": 3,
 }
 
 
@@ -581,6 +592,10 @@ class StatsUpdate(BaseModel):
     pay_qris_manual_enabled: bool = True
     pay_transfer_enabled: bool = True
     telegram_group_url: str = ""
+    admin_whatsapp: str = ""
+    pending_reminder_enabled: bool = True
+    pending_reminder_interval_minutes: int = 30
+    pending_reminder_max_count: int = 3
 
 
 @api_router.put("/admin/stats")
@@ -875,6 +890,26 @@ async def create_order(payload: OrderCreate):
         f"⏳ Cek mutasi/bukti transfer, lalu konfirmasi di admin panel."
     )
     await send_telegram(msg)
+
+    # Best-effort public bot notif to buyer (if chat_id linked earlier)
+    try:
+        if order.payment_method != "qris_otomatis":
+            chat_id = await _find_buyer_telegram_chat_id(order.contact)
+            if chat_id:
+                buyer_msg = (
+                    f"<b>🛒 Pesanan Diterima!</b>\n\n"
+                    f"Halo {order.buyer_name}, pesananmu sudah masuk.\n\n"
+                    f"<b>Order ID:</b> {order.order_code}\n"
+                    f"<b>Produk:</b> {_display_name}\n"
+                    f"<b>Total:</b> Rp {int(price):,}\n"
+                    f"<b>Pembayaran:</b> {order.payment_method.upper()}\n\n"
+                    f"📸 Jangan lupa kirim screenshot bukti bayar + sebutkan "
+                    f"Order ID <b>{order.order_code}</b> ke admin WhatsApp ya, Sobat Creative! 💛"
+                )
+                await send_public_telegram(chat_id, buyer_msg)
+    except Exception as e:
+        logger.error(f"Buyer public bot notif on order create failed: {e}")
+
     return {
         "order_code": order.order_code,
         "id": order.id,

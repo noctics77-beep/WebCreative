@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { api, formatIDR, resolveImageUrl } from "@/lib/api";
 import { toast } from "sonner";
-import { CheckCircle2, Copy, Loader2, Clock, ShieldCheck, QrCode, PackageSearch, Store } from "lucide-react";
+import { CheckCircle2, Copy, Loader2, Clock, ShieldCheck, QrCode, PackageSearch, Store, MessageCircle, AlertTriangle } from "lucide-react";
 import {
   trackViewContent,
   trackInitiateCheckout,
@@ -47,6 +47,13 @@ export default function OrderModal({ open, onClose, product, variant, referral }
   const [remaining, setRemaining] = useState(0); // seconds
   const pollRef = useRef(null);
   const [validating, setValidating] = useState(false);
+  // Manual QRIS/Transfer UX
+  const [manualStartedAt, setManualStartedAt] = useState(null);
+  const [manualRemaining, setManualRemaining] = useState(600); // 10 minutes in seconds
+  const [manualExpired, setManualExpired] = useState(false);
+  const [transferAmount, setTransferAmount] = useState("");
+  const [adminWhatsapp, setAdminWhatsapp] = useState("");
+  const reminderIntervalRef = useRef(null);
 
   useEffect(() => {
     if (open) {
@@ -63,6 +70,8 @@ export default function OrderModal({ open, onClose, product, variant, referral }
           })
         )
         .catch(() => {});
+      // Fetch admin WhatsApp for success screen shortcut
+      api.get("/config").then((r) => setAdminWhatsapp(r.data.admin_whatsapp || "")).catch(() => {});
       // Track ViewContent when user opens product detail / order modal
       if (product) {
         trackViewContent(product);
@@ -153,6 +162,54 @@ export default function OrderModal({ open, onClose, product, variant, referral }
     setForm((f) => (enabled.find((o) => o.value === f.payment_method) ? f : { ...f, payment_method: enabled[0].value }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paySettings.pay_qris_otomatis_enabled, paySettings.pay_qris_manual_enabled, paySettings.pay_transfer_enabled]);
+
+  // Manual QRIS/Transfer: 10-minute countdown + periodic toast reminders + beforeunload
+  useEffect(() => {
+    const isManualStep = step === "payment" && form.payment_method !== "qris_otomatis";
+    if (!isManualStep) {
+      setManualStartedAt(null);
+      setManualRemaining(600);
+      setManualExpired(false);
+      return;
+    }
+    // start timer once we're on the payment step
+    const startedAt = Date.now();
+    setManualStartedAt(startedAt);
+    setManualExpired(false);
+    setManualRemaining(600);
+
+    const tick = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+      const left = Math.max(0, 600 - elapsed);
+      setManualRemaining(left);
+      if (left === 0) {
+        setManualExpired(true);
+        clearInterval(tick);
+      }
+    }, 1000);
+
+    // Toast reminder every 2 minutes
+    const reminderTick = setInterval(() => {
+      toast.info("Sudah bayar? Jangan lupa klik 'Saya Sudah Bayar' ya! 💛", {
+        duration: 5000,
+      });
+    }, 120000);
+    reminderIntervalRef.current = reminderTick;
+
+    // beforeunload prompt
+    const beforeUnload = (e) => {
+      e.preventDefault();
+      e.returnValue = "Pesanan kamu belum dikirim! Klik 'Saya Sudah Bayar' dulu ya setelah transfer selesai.";
+      return e.returnValue;
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+
+    return () => {
+      clearInterval(tick);
+      clearInterval(reminderTick);
+      window.removeEventListener("beforeunload", beforeUnload);
+    };
+  }, [step, form.payment_method]);
 
   if (!product) return null;
   // Variant-aware pricing — if variant given, override product price
@@ -284,9 +341,17 @@ export default function OrderModal({ open, onClose, product, variant, referral }
   };
 
   const confirmPayment = async () => {
+    if (manualExpired) {
+      toast.error("QR sudah expired. Klik 'Generate QR Baru' dulu ya.");
+      return;
+    }
     setLoading(true);
     try {
-      const res = await api.post("/orders", buildPayload());
+      const payload = buildPayload();
+      if (transferAmount) {
+        payload.transfer_amount = parseFloat(transferAmount) || 0;
+      }
+      const res = await api.post("/orders", payload);
       setOrderCode(res.data.order_code);
       setStep("success");
     } catch (e) {
@@ -294,6 +359,13 @@ export default function OrderModal({ open, onClose, product, variant, referral }
     } finally {
       setLoading(false);
     }
+  };
+
+  const regenerateManualQris = () => {
+    // Simply resets manual timer by toggling state via effect
+    setStep("form");
+    setTimeout(() => setStep("payment"), 50);
+    toast.info("QR di-generate ulang ya!");
   };
 
   const resetAll = () => {
@@ -305,6 +377,9 @@ export default function OrderModal({ open, onClose, product, variant, referral }
     setAutoPaid(false);
     setExpired(false);
     setRemaining(0);
+    setManualExpired(false);
+    setManualRemaining(600);
+    setTransferAmount("");
     setForm({ buyer_name: "", contact: "", payment_method: "qris_otomatis", discount_code: "" });
   };
 
@@ -692,17 +767,73 @@ export default function OrderModal({ open, onClose, product, variant, referral }
               </div>
             ) : form.payment_method === "qris" ? (
               paySettings.qris_url ? (
-                <div className="text-center">
-                  <img
-                    src={resolveImageUrl(paySettings.qris_url)}
-                    alt="QRIS"
-                    data-testid="qris-image"
-                    className="mx-auto max-w-[260px] w-full rounded-xl border border-white/10 bg-white p-3"
-                    onError={(e) => { e.currentTarget.style.display = "none"; }}
-                  />
-                  <p className="text-xs text-white/50 mt-2">
-                    Scan QRIS di atas dengan aplikasi e-wallet/bank kamu.
-                  </p>
+                <div className="space-y-3">
+                  {/* Countdown timer above QR */}
+                  <div
+                    data-testid="manual-qris-countdown"
+                    className={`flex items-center justify-center gap-2 text-sm rounded-lg py-2 px-3 ${
+                      manualExpired
+                        ? "bg-red-500/10 border border-red-500/30 text-red-300"
+                        : manualRemaining < 120
+                        ? "bg-red-500/10 border border-red-500/30 text-red-300"
+                        : "bg-[#F5A623]/10 border border-[#F5A623]/30 text-[#F5A623]"
+                    }`}
+                  >
+                    <Clock size={15} />
+                    {manualExpired ? (
+                      <span className="font-semibold">QR Kadaluarsa — silakan generate ulang</span>
+                    ) : (
+                      <>
+                        QR Code berlaku selama:{" "}
+                        <span className="font-mono font-bold ml-1">
+                          {String(Math.floor(manualRemaining / 60)).padStart(2, "0")}:
+                          {String(manualRemaining % 60).padStart(2, "0")}
+                        </span>
+                      </>
+                    )}
+                  </div>
+
+                  {manualExpired ? (
+                    <div className="text-center py-6 border border-dashed border-red-500/30 rounded-xl">
+                      <p className="text-red-400 font-semibold mb-3">QR Kadaluarsa ⏰</p>
+                      <Button
+                        onClick={regenerateManualQris}
+                        data-testid="regenerate-qris-btn"
+                        className="bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold"
+                      >
+                        Generate QR Baru
+                      </Button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="text-center">
+                        <img
+                          src={resolveImageUrl(paySettings.qris_url)}
+                          alt="QRIS"
+                          data-testid="qris-image"
+                          className="mx-auto max-w-[260px] w-full rounded-xl border border-white/10 bg-white p-3"
+                          onError={(e) => { e.currentTarget.style.display = "none"; }}
+                        />
+                        <p className="text-xs text-white/50 mt-2">
+                          Scan QRIS di atas dengan aplikasi e-wallet/bank kamu.
+                        </p>
+                      </div>
+
+                      {/* Warning card */}
+                      <div
+                        data-testid="manual-payment-warning"
+                        className="rounded-xl border-2 border-[#F5A623]/50 bg-[#F5A623]/10 p-4 flex items-start gap-3"
+                      >
+                        <AlertTriangle size={22} className="text-[#F5A623] flex-shrink-0 mt-0.5" />
+                        <div>
+                          <p className="text-sm font-semibold text-white mb-1">⚠️ PENTING</p>
+                          <p className="text-xs text-white/80 leading-relaxed">
+                            Setelah scan dan bayar, <b className="text-[#F5A623]">klik tombol &ldquo;Saya Sudah Bayar&rdquo;</b> di bawah untuk mengirimkan pesanan kamu ya, Sobat Creative! 💛
+                          </p>
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </div>
               ) : (
                 <div className="text-center text-white/55 text-sm py-6 border border-dashed border-white/10 rounded-xl">
@@ -710,32 +841,57 @@ export default function OrderModal({ open, onClose, product, variant, referral }
                 </div>
               )
             ) : (
-              <div className="space-y-2" data-testid="bank-info">
+              <div className="space-y-3" data-testid="bank-info">
                 {(paySettings.bank_accounts || []).length === 0 ? (
                   <div className="text-center text-white/55 text-sm py-6 border border-dashed border-white/10 rounded-xl">
                     Admin belum mengatur rekening. Hubungi admin.
                   </div>
                 ) : (
-                  (paySettings.bank_accounts || []).map((b, i) => (
+                  <>
+                    {(paySettings.bank_accounts || []).map((b, i) => (
+                      <div
+                        key={i}
+                        data-testid={`bank-account-${i}`}
+                        className="rounded-xl border border-[#F5A623]/30 bg-[#F5A623]/5 p-4 space-y-1"
+                      >
+                        <div className="flex justify-between text-sm">
+                          <span className="text-white/55">Bank</span>
+                          <b className="text-white">{b.bank_name}</b>
+                        </div>
+                        <div className="flex justify-between items-center text-sm">
+                          <span className="text-white/55">No. Rekening</span>
+                          <div className="flex items-center gap-2">
+                            <b className="font-mono gold-text text-base">{b.account_number}</b>
+                            <button
+                              type="button"
+                              onClick={() => { navigator.clipboard.writeText(b.account_number); toast.success("No. rekening disalin"); }}
+                              className="text-white/60 hover:text-[#F5A623]"
+                              title="Salin"
+                            >
+                              <Copy size={13} />
+                            </button>
+                          </div>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-white/55">Atas Nama</span>
+                          <b className="text-white">{b.holder}</b>
+                        </div>
+                      </div>
+                    ))}
+                    {/* Warning card */}
                     <div
-                      key={i}
-                      data-testid={`bank-account-${i}`}
-                      className="rounded-xl border border-[#F5A623]/30 bg-[#F5A623]/5 p-4 space-y-1"
+                      data-testid="manual-payment-warning"
+                      className="rounded-xl border-2 border-[#F5A623]/50 bg-[#F5A623]/10 p-4 flex items-start gap-3"
                     >
-                      <div className="flex justify-between text-sm">
-                        <span className="text-white/55">Bank</span>
-                        <b className="text-white">{b.bank_name}</b>
-                      </div>
-                      <div className="flex justify-between items-center text-sm">
-                        <span className="text-white/55">No. Rekening</span>
-                        <b className="font-mono gold-text text-base">{b.account_number}</b>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-white/55">Atas Nama</span>
-                        <b className="text-white">{b.holder}</b>
+                      <AlertTriangle size={22} className="text-[#F5A623] flex-shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-sm font-semibold text-white mb-1">⚠️ PENTING</p>
+                        <p className="text-xs text-white/80 leading-relaxed">
+                          Setelah transfer, <b className="text-[#F5A623]">klik tombol &ldquo;Saya Sudah Bayar&rdquo;</b> di bawah untuk mengirimkan pesanan kamu ya, Sobat Creative! 💛
+                        </p>
                       </div>
                     </div>
-                  ))
+                  </>
                 )}
               </div>
             )}
@@ -750,26 +906,46 @@ export default function OrderModal({ open, onClose, product, variant, referral }
               </div>
             </div>
 
-            {form.payment_method !== "qris_otomatis" && (
-              <div className="flex gap-2 pt-2">
-                <Button
-                  type="button"
-                  onClick={() => setStep("form")}
-                  data-testid="back-to-form-btn"
-                  className="flex-1 bg-white/5 hover:bg-white/10 text-white border border-white/15"
-                >
-                  Kembali
-                </Button>
-                <Button
-                  type="button"
-                  onClick={confirmPayment}
-                  disabled={loading}
-                  data-testid="confirm-payment-btn"
-                  className="flex-1 bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-semibold"
-                >
-                  {loading ? <Loader2 className="animate-spin" size={16} /> : "Saya Sudah Bayar"}
-                </Button>
-              </div>
+            {form.payment_method !== "qris_otomatis" && !manualExpired && (
+              <>
+                {/* Optional nominal transfer input */}
+                <div className="pt-2">
+                  <Label className="text-xs text-white/60">
+                    Nominal yang kamu transfer (opsional)
+                  </Label>
+                  <Input
+                    type="number"
+                    data-testid="transfer-amount-input"
+                    value={transferAmount}
+                    onChange={(e) => setTransferAmount(e.target.value)}
+                    placeholder={`Contoh: ${Math.round(finalPrice)}`}
+                    className="mt-1 bg-white/5 border-white/15 no-spinner"
+                  />
+                  <p className="text-[10px] text-white/40 mt-1">
+                    Membantu admin verifikasi lebih cepat 💛
+                  </p>
+                </div>
+
+                <div className="flex gap-2 pt-2">
+                  <Button
+                    type="button"
+                    onClick={() => setStep("form")}
+                    data-testid="back-to-form-btn"
+                    className="flex-1 bg-white/5 hover:bg-white/10 text-white border border-white/15"
+                  >
+                    Kembali
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={confirmPayment}
+                    disabled={loading}
+                    data-testid="confirm-payment-btn"
+                    className="flex-[2] bg-[#F5A623] hover:bg-[#d98f1a] text-[#0f1117] font-bold text-base py-6 shadow-[0_0_28px_rgba(245,166,35,0.35)] hover:shadow-[0_0_36px_rgba(245,166,35,0.5)] animate-pulse-slow"
+                  >
+                    {loading ? <Loader2 className="animate-spin" size={20} /> : <><CheckCircle2 size={20} className="mr-2" />Saya Sudah Bayar ✓</>}
+                  </Button>
+                </div>
+              </>
             )}
           </div>
         )}
@@ -844,6 +1020,73 @@ export default function OrderModal({ open, onClose, product, variant, referral }
                 <>Mohon tunggu konfirmasi admin via <b>WhatsApp/Telegram</b>. Pantau status di halaman <b>Lacak Pesanan</b> ya! 🚀</>
               )}
             </p>
+
+            {/* Payment confirmation instructions (manual methods only) */}
+            {!autoPaid && (form.payment_method === "qris" || form.payment_method === "transfer") && (
+              <div
+                data-testid="screenshot-instructions"
+                className="mt-4 rounded-xl border-2 border-[#F5A623]/50 bg-gradient-to-br from-[#F5A623]/10 to-transparent p-4"
+              >
+                <div className="flex items-start gap-2.5 mb-3">
+                  <div className="text-2xl leading-none">📸</div>
+                  <div className="flex-1">
+                    <h4 className="font-display text-sm text-[#F5A623] font-semibold mb-1">
+                      Cara Konfirmasi Pembayaran
+                    </h4>
+                    <ol className="text-xs text-white/75 space-y-1.5 list-decimal ml-4 leading-relaxed">
+                      <li>Screenshot halaman ini (termasuk Order ID kamu)</li>
+                      <li>Kirim screenshot ke WhatsApp admin</li>
+                      <li>Sebutkan Order ID: <b className="text-[#F5A623] font-mono">{orderCode}</b></li>
+                    </ol>
+                    <p className="text-[10px] text-white/50 mt-2">
+                      Ini membantu admin memproses pesananmu lebih cepat, Sobat Creative! 💛
+                    </p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  {adminWhatsapp && (
+                    <a
+                      href={`https://wa.me/${adminWhatsapp.replace(/[^0-9]/g, "")}?text=${encodeURIComponent(
+                        `Halo admin, saya sudah bayar. Order ID saya: ${orderCode}`
+                      )}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      data-testid="chat-admin-whatsapp-btn"
+                      className="inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg bg-[#25D366] hover:bg-[#20b858] text-white text-xs font-semibold transition-colors"
+                    >
+                      <MessageCircle size={14} /> Chat Admin WhatsApp
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(orderCode);
+                      toast.success("Order ID disalin ✓");
+                    }}
+                    data-testid="copy-order-id-btn"
+                    className={`inline-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg bg-white/8 hover:bg-white/12 text-white text-xs font-semibold border border-white/15 transition-colors ${
+                      !adminWhatsapp ? "col-span-2" : ""
+                    }`}
+                  >
+                    <Copy size={13} /> Salin Order ID
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Auto-payment success message */}
+            {autoPaid && (
+              <div
+                data-testid="auto-paid-info"
+                className="mt-4 rounded-xl border-2 border-green-500/40 bg-green-500/10 p-4 flex items-start gap-2.5"
+              >
+                <div className="text-2xl leading-none">✅</div>
+                <div>
+                  <p className="text-sm font-semibold text-green-200 mb-0.5">Pembayaran otomatis terkonfirmasi!</p>
+                  <p className="text-xs text-green-100/70">Tidak perlu WA admin — pesanan kamu sedang diproses.</p>
+                </div>
+              </div>
+            )}
 
             {/* Action buttons */}
             <div className="mt-5 grid grid-cols-2 gap-2">

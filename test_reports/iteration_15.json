@@ -1,0 +1,32 @@
+{
+  "summary": "Iteration 15 P0 features fully verified. Backend: 8/8 pytest passed (new stats fields, PUT /admin/stats persistence, /api/config prefers settings admin_whatsapp, scheduler.pending_order_reminder job registered, reminder increments counter with interval throttle + max_count anti-spam, and correctly skips confirmed / qris_otomatis orders + short-circuits when disabled). Frontend: Admin Settings shows admin_whatsapp + reminder toggle/interval/max-count controls. OrderModal QRIS Manual flow renders manual-qris-countdown (10:00), manual-payment-warning, transfer-amount-input, confirm-payment-btn. Transfer Bank flow renders bank-info + all manual widgets. Success screen (manual method) shows screenshot-instructions with real Order ID (ORD073668), chat-admin-whatsapp-btn linking to wa.me/6287741449684?text=..., copy-order-id-btn. auto-paid-info correctly hidden on manual method.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin panel dashboard", "issues": ["Non-blocking recharts warning: chart container width(-1)/height(-1) on initial mount before layout — cosmetic console warning only"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration15.py",
+    "/app/test_reports/pytest/iter15.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is 4325 lines — still growing; recommend modularising (settings, orders, scheduler wiring) for maintainability.",
+    "OrderModal.jsx is 1187 lines and holds several concerns (form, countdown, manual/auto payment, success flows) — consider splitting into ManualPaymentStep / SuccessCard subcomponents.",
+    "Scheduler _pending_reminder_job builds threshold from pending_reminder_interval_minutes AND enforces same interval as last_admin_reminder_at throttle — correct anti-spam design (verified in tests).",
+    "PATCH: payment method value for QRIS Manual is 'qris' (not 'qris_manual'); data-testid pattern payment-{value}-option => 'payment-qris-option'. Selector documented for next agent."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration15.py (created)"
+  ],
+  "success_rate": {"backend": "100% (8/8)", "frontend": "100% (all data-testids + integrations verified)"},
+  "test_credentials": "Admin password Blokirsandi12 (from /app/memory/test_credentials.md); admin_whatsapp seeded to 6287741449684",
+  "seed_data_creation": "Pytest inserts and cleans up TEST_it15_* orders. admin_whatsapp is set to 6287741449684 via PUT /api/admin/stats during tests (persists). One real UI-created order ORD073668 (buyer='TEST Buyer', qris manual, pending) remains in DB — safe to delete via admin panel.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "For QRIS Manual selector use data-testid='payment-qris-option' (value='qris'), QRIS Otomatis='payment-qris_otomatis-option', Transfer='payment-transfer-option'. Product slug for testing is 'test-import1' (id 49c23174). Scheduler jobs can be inspected by importing /app/backend/scheduler.py and calling init_scheduler(db, send_fn).get_jobs(); the _pending_reminder_job coroutine is accessible via job.func for direct invocation.",
+  "rca of the issue": "N/A — no blocking issues."
+}
