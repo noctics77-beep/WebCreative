@@ -202,7 +202,16 @@ def init_scheduler(db, send_telegram_fn) -> AsyncIOScheduler:
                 )
 
                 try:
-                    await send_telegram_fn(text)
+                    kb = {
+                        "inline_keyboard": [
+                            [
+                                {"text": "✅ Konfirmasi", "callback_data": f"confirm:{o['id']}"},
+                                {"text": "❌ Batalkan", "callback_data": f"cancel:{o['id']}"},
+                            ],
+                            [{"text": "🔗 Buka Admin Panel", "url": "https://creativestore.my.id/admin"}],
+                        ]
+                    }
+                    await send_telegram_fn(text, reply_markup=kb)
                     await db.orders.update_one(
                         {"id": o["id"]},
                         {"$set": {

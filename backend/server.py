@@ -11,7 +11,7 @@ import httpx
 import bcrypt
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import uuid
 from datetime import datetime, timezone, timedelta
 from fastapi import Request
@@ -68,22 +68,89 @@ def gen_affiliate_code():
     return "AFF" + "".join(random.choices(string.ascii_uppercase + string.digits, k=5))
 
 
-async def send_telegram(message: str):
+async def send_telegram(message: str, reply_markup: Optional[dict] = None):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        return
+        return None
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try:
+        payload: dict = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message,
+            "parse_mode": "HTML",
+        }
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
         async with httpx.AsyncClient(timeout=10.0) as cli:
-            await cli.post(
-                url,
-                json={
-                    "chat_id": TELEGRAM_CHAT_ID,
-                    "text": message,
-                    "parse_mode": "HTML",
-                },
-            )
+            r = await cli.post(url, json=payload)
+            if r.status_code == 200:
+                return r.json().get("result")
     except Exception as e:
         logger.error(f"Telegram send failed: {e}")
+    return None
+
+
+async def edit_telegram_message(chat_id: Any, message_id: int, text: str, reply_markup: Optional[dict] = None):
+    """Edit an existing message sent by admin bot (used to remove/replace inline keyboard)."""
+    if not TELEGRAM_BOT_TOKEN:
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/editMessageText"
+    try:
+        payload: dict = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "parse_mode": "HTML",
+        }
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        async with httpx.AsyncClient(timeout=10.0) as cli:
+            await cli.post(url, json=payload)
+    except Exception as e:
+        logger.error(f"Telegram edit failed: {e}")
+
+
+async def answer_callback_query(callback_query_id: str, text: str = "", show_alert: bool = False):
+    if not TELEGRAM_BOT_TOKEN:
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/answerCallbackQuery"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as cli:
+            await cli.post(url, json={
+                "callback_query_id": callback_query_id,
+                "text": text,
+                "show_alert": show_alert,
+            })
+    except Exception as e:
+        logger.error(f"Telegram answerCallback failed: {e}")
+
+
+def _admin_order_inline_kb(order_id: str, order_code: str, stage: str = "initial") -> dict:
+    """Build inline keyboard for admin order notifications.
+
+    stage:
+      - initial: [Konfirmasi] [Batalkan] + [Buka Admin Panel]
+      - confirm_cancel: [YA, Batalkan] [Kembali] + [Buka Admin Panel]
+    """
+    admin_url = "https://creativestore.my.id/admin"
+    if stage == "confirm_cancel":
+        return {
+            "inline_keyboard": [
+                [
+                    {"text": "⚠️ YA, Batalkan", "callback_data": f"cancel_confirm:{order_id}"},
+                    {"text": "↩️ Kembali", "callback_data": f"back:{order_id}"},
+                ],
+                [{"text": "🔗 Buka Admin Panel", "url": admin_url}],
+            ]
+        }
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "✅ Konfirmasi", "callback_data": f"confirm:{order_id}"},
+                {"text": "❌ Batalkan", "callback_data": f"cancel:{order_id}"},
+            ],
+            [{"text": "🔗 Buka Admin Panel", "url": admin_url}],
+        ]
+    }
 
 
 async def send_public_telegram(chat_id: str, message: str) -> bool:
@@ -889,7 +956,10 @@ async def create_order(payload: OrderCreate):
         f"<b>Referral:</b> {referral or '-'}\n\n"
         f"⏳ Cek mutasi/bukti transfer, lalu konfirmasi di admin panel."
     )
-    await send_telegram(msg)
+    kb = None
+    if order.payment_method in ("qris", "transfer"):
+        kb = _admin_order_inline_kb(order.id, order.order_code)
+    await send_telegram(msg, reply_markup=kb)
 
     # Best-effort public bot notif to buyer (if chat_id linked earlier)
     try:
@@ -1929,22 +1999,35 @@ async def admin_update_order_status(order_id: str, payload: StatusUpdate, x_admi
     await verify_admin(x_admin_password)
     if payload.status not in ("confirmed", "cancelled"):
         raise HTTPException(400, "Status tidak valid")
+    result = await _apply_order_status_change(order_id, payload.status)
+    if result.get("error"):
+        raise HTTPException(result.get("code", 400), result["error"])
+    return {"ok": True}
+
+
+async def _apply_order_status_change(order_id: str, new_status: str) -> dict:
+    """Shared logic used by HTTP endpoint AND Telegram callback to confirm/cancel order.
+
+    Returns {"ok": True, "order": ...} on success or {"error": "...", "code": ...} on failure.
+    """
+    if new_status not in ("confirmed", "cancelled"):
+        return {"error": "Status tidak valid", "code": 400}
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
-        raise HTTPException(404, "Order tidak ditemukan")
+        return {"error": "Order tidak ditemukan", "code": 404}
     if order["status"] != "pending":
-        raise HTTPException(400, "Order sudah diproses")
+        return {"error": "Order sudah diproses", "code": 400, "already": True}
 
-    await db.orders.update_one({"id": order_id}, {"$set": {"status": payload.status}})
+    await db.orders.update_one({"id": order_id}, {"$set": {"status": new_status}})
 
     # === NOTIF KE PEMBELI via Bot Publik (jika chat_id tersimpan) ===
     try:
-        await _notify_buyer_order_status(order, payload.status)
+        await _notify_buyer_order_status(order, new_status)
     except Exception as e:
         logger.error(f"Notify buyer order status failed: {e}")
 
-    # If confirmed: decrement stock (kalau stock_limit_enabled) & add commission
-    if payload.status == "confirmed":
+    # If confirmed: decrement stock, commission, auto-delivery
+    if new_status == "confirmed":
         prod = await db.products.find_one({"id": order.get("product_id")}, {"_id": 0})
         if prod and prod.get("stock_limit_enabled"):
             new_qty = max(0, int(prod.get("stock_quantity", 0)) - 1)
@@ -1957,19 +2040,15 @@ async def admin_update_order_status(order_id: str, payload: StatusUpdate, x_admi
             except Exception as e:
                 logger.error(f"Low stock alert failed: {e}")
 
-        # Referral commission
         if order.get("referral_affiliate_code") and order.get("commission_amount", 0) > 0:
             await db.affiliates.update_one(
                 {"affiliate_code": order["referral_affiliate_code"]},
-                {
-                    "$inc": {
-                        "balance": order["commission_amount"],
-                        "total_earned": order["commission_amount"],
-                    }
-                },
+                {"$inc": {
+                    "balance": order["commission_amount"],
+                    "total_earned": order["commission_amount"],
+                }},
             )
 
-        # Auto-delivery kalau product/variant enabled
         try:
             fresh = await db.orders.find_one({"id": order_id}, {"_id": 0})
             if fresh:
@@ -1977,7 +2056,7 @@ async def admin_update_order_status(order_id: str, payload: StatusUpdate, x_admi
         except Exception as e:
             logger.error(f"Auto delivery (manual confirm) error: {e}")
 
-    return {"ok": True}
+    return {"ok": True, "order": order}
 
 
 @api_router.get("/admin/affiliates")
@@ -3020,6 +3099,179 @@ async def public_telegram_webhook(request: Request):
     if reply_text:
         await send_public_telegram(str(chat_id), reply_text)
     return {"ok": True}
+
+
+# =============================================================================
+# ADMIN BOT WEBHOOK (inline keyboard callbacks for order actions)
+# =============================================================================
+@api_router.post("/telegram/admin-webhook")
+async def admin_telegram_webhook(request: Request):
+    """Handles callback_query from admin bot inline keyboards.
+
+    Security: only accept callbacks from TELEGRAM_CHAT_ID (admin chat).
+    """
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return {"ok": False, "reason": "admin_bot_not_configured"}
+
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False}
+
+    cb = body.get("callback_query") or {}
+    if not cb:
+        return {"ok": True}  # ignore non-callback updates (e.g., regular messages)
+
+    cb_id = cb.get("id", "")
+    data = cb.get("data") or ""
+    msg = cb.get("message") or {}
+    chat = msg.get("chat") or {}
+    from_user = cb.get("from") or {}
+    chat_id = chat.get("id")
+    message_id = msg.get("message_id")
+    original_text = msg.get("text") or ""
+    from_id = from_user.get("id")
+
+    # SECURITY: only admin chat_id may act
+    if str(chat_id) != str(TELEGRAM_CHAT_ID) and str(from_id) != str(TELEGRAM_CHAT_ID):
+        logger.warning(f"Unauthorized admin webhook callback from chat_id={chat_id}, from_id={from_id}, data={data}")
+        try:
+            await answer_callback_query(cb_id, "Aksi ini hanya untuk admin.", show_alert=True)
+        except Exception:
+            pass
+        return {"ok": True, "ignored": True}
+
+    # Parse action:order_id
+    if ":" not in data:
+        await answer_callback_query(cb_id, "")
+        return {"ok": True}
+    action, _, order_id = data.partition(":")
+
+    # Fetch order info for context
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order and action not in ("back",):
+        await answer_callback_query(cb_id, "Order tidak ditemukan.", show_alert=True)
+        return {"ok": True}
+
+    order_code = (order or {}).get("order_code", order_id[:8])
+
+    if action == "confirm":
+        result = await _apply_order_status_change(order_id, "confirmed")
+        if result.get("error"):
+            hint = "Order sudah diproses sebelumnya." if result.get("already") else result["error"]
+            await answer_callback_query(cb_id, hint, show_alert=True)
+            # Remove keyboard if already processed
+            if result.get("already") and chat_id and message_id:
+                await edit_telegram_message(
+                    chat_id, message_id,
+                    original_text + f"\n\n<i>ℹ️ Status: {order.get('status').upper()}</i>",
+                    reply_markup={"inline_keyboard": []},
+                )
+            return {"ok": True}
+        # Success
+        await answer_callback_query(cb_id, f"✅ Order {order_code} dikonfirmasi!")
+        if chat_id and message_id:
+            await edit_telegram_message(
+                chat_id, message_id,
+                original_text + f"\n\n<b>✅ DIKONFIRMASI</b> oleh admin (via Telegram)",
+                reply_markup={"inline_keyboard": [
+                    [{"text": "🔗 Buka Admin Panel", "url": "https://creativestore.my.id/admin"}]
+                ]},
+            )
+        return {"ok": True}
+
+    if action == "cancel":
+        # Step 1: ask confirmation (swap keyboard)
+        await answer_callback_query(cb_id, "Klik YA untuk membatalkan order.")
+        if chat_id and message_id:
+            await edit_telegram_message(
+                chat_id, message_id,
+                original_text + f"\n\n⚠️ <b>Yakin batalkan order {order_code}?</b>",
+                reply_markup=_admin_order_inline_kb(order_id, order_code, stage="confirm_cancel"),
+            )
+        return {"ok": True}
+
+    if action == "back":
+        # Return to initial keyboard
+        await answer_callback_query(cb_id, "")
+        if chat_id and message_id and order:
+            # Strip confirmation prompt from text
+            clean_text = original_text.split("\n\n⚠️")[0]
+            await edit_telegram_message(
+                chat_id, message_id,
+                clean_text,
+                reply_markup=_admin_order_inline_kb(order_id, order_code, stage="initial"),
+            )
+        return {"ok": True}
+
+    if action == "cancel_confirm":
+        result = await _apply_order_status_change(order_id, "cancelled")
+        if result.get("error"):
+            hint = "Order sudah diproses sebelumnya." if result.get("already") else result["error"]
+            await answer_callback_query(cb_id, hint, show_alert=True)
+            return {"ok": True}
+        await answer_callback_query(cb_id, f"❌ Order {order_code} dibatalkan.")
+        if chat_id and message_id:
+            clean_text = original_text.split("\n\n⚠️")[0]
+            await edit_telegram_message(
+                chat_id, message_id,
+                clean_text + f"\n\n<b>❌ DIBATALKAN</b> oleh admin (via Telegram)",
+                reply_markup={"inline_keyboard": [
+                    [{"text": "🔗 Buka Admin Panel", "url": "https://creativestore.my.id/admin"}]
+                ]},
+            )
+        return {"ok": True}
+
+    await answer_callback_query(cb_id, "")
+    return {"ok": True}
+
+
+class TelegramWebhookSetupPayload(BaseModel):
+    base_url: str  # e.g. https://creativestore.my.id (production) OR preview URL
+
+
+@api_router.post("/admin/telegram/setup-admin-webhook")
+async def admin_setup_telegram_webhook(
+    payload: TelegramWebhookSetupPayload,
+    x_admin_password: Optional[str] = Header(None),
+):
+    """One-time setup: register /api/telegram/admin-webhook with Telegram Bot API.
+
+    Only run this against your PRODUCTION URL. Do not call from preview environments —
+    it will hijack the callback route from production.
+    """
+    await verify_admin(x_admin_password)
+    if not TELEGRAM_BOT_TOKEN:
+        raise HTTPException(400, "TELEGRAM_BOT_TOKEN belum dikonfigurasi")
+
+    base = payload.base_url.rstrip("/")
+    if not base.startswith("https://"):
+        raise HTTPException(400, "base_url harus HTTPS")
+
+    webhook_url = f"{base}/api/telegram/admin-webhook"
+    async with httpx.AsyncClient(timeout=10.0) as cli:
+        r = await cli.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/setWebhook",
+            json={"url": webhook_url, "allowed_updates": ["callback_query"]},
+        )
+        try:
+            data = r.json()
+        except Exception:
+            data = {"status_code": r.status_code, "text": r.text}
+    return {"ok": r.status_code == 200 and data.get("ok"), "webhook_url": webhook_url, "telegram_response": data}
+
+
+@api_router.get("/admin/telegram/webhook-info")
+async def admin_get_telegram_webhook_info(x_admin_password: Optional[str] = Header(None)):
+    await verify_admin(x_admin_password)
+    if not TELEGRAM_BOT_TOKEN:
+        raise HTTPException(400, "TELEGRAM_BOT_TOKEN belum dikonfigurasi")
+    async with httpx.AsyncClient(timeout=10.0) as cli:
+        r = await cli.get(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getWebhookInfo")
+        try:
+            return r.json()
+        except Exception:
+            return {"status_code": r.status_code, "text": r.text}
 
 
 # =============================================================================

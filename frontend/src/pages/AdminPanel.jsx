@@ -20,6 +20,7 @@ import { adminApi, formatIDR, downloadAdminFile, resolveImageUrl } from "@/lib/a
 import { parseBulkImportText } from "@/lib/bulkImportParser";
 import ObjectPositionPicker from "@/components/ObjectPositionPicker";
 import TestimonialsTab from "@/components/admin/TestimonialsTab";
+import TelegramInlineButtonSetup from "@/components/admin/TelegramInlineButtonSetup";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -2276,6 +2277,8 @@ function SettingsTab({ api }) {
             Digunakan untuk tombol &quot;Chat Admin WhatsApp&quot; di halaman konfirmasi order. Kalau kosong, tombol tidak tampil.
           </p>
         </Field>
+
+        <TelegramInlineButtonSetup api={api} />
 
         <h3 className="font-display text-lg pt-2">Reminder Order Belum Dikonfirmasi</h3>
         <div className="rounded-lg bg-[#0f1117] border border-white/10 p-3 space-y-3" data-testid="reminder-settings">
